@@ -66,7 +66,7 @@ class NavDrawer extends StatelessWidget {
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: const Text(
-                          '2.7',
+                          '2.9 preview',
                           style: TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.w600,
