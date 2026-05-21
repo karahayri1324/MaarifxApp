@@ -1,7 +1,9 @@
 import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:exif/exif.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import '../../config/theme.dart';
@@ -44,15 +46,18 @@ class _ChatInputState extends State<ChatInput> {
 
   /// Sıkıştırma pipeline'ı.
   ///
-  /// EXIF rotation normalize'ı `image_picker`'ın native koduna bırakılıyor
-  /// (`pickImage(maxWidth/maxHeight)` → iOS UIImage / Android BitmapFactory
-  /// pikseli döndürüp EXIF'i strip ediyor). Burada sadece boyut/kalite
-  /// sıkıştırması yapılır — `autoCorrectionAngle: false` çift rotasyonu
-  /// önler, çünkü orientation zaten uygulanmış halde geliyor.
+  /// Orientation'ı `image_picker`'a veya `autoCorrectionAngle`'a bırakmıyoruz;
+  /// ikisi de EXIF tag'ına körü körüne güvenir ve multi-cam Android
+  /// telefonlarda (piksel zaten döndürülmüş + bayat tag) çift rotasyona /
+  /// 90° kaymaya yol açar. Bunun yerine [_resolveRotation] EXIF tag'ı ile
+  /// gerçek piksel oranını karşılaştırıp uygulanacak açıyı kendimiz
+  /// hesaplar, FlutterImageCompress'e sabit `rotate` olarak veririz.
   Future<void> _processAndSetImage(File imageFile) async {
     final tempDir = await getTemporaryDirectory();
     final ts = DateTime.now().millisecondsSinceEpoch;
     final compressedPath = '${tempDir.path}/maarifx_$ts.jpg';
+
+    final rotation = await _resolveRotation(imageFile);
 
     final result = await FlutterImageCompress.compressAndGetFile(
       imageFile.path,
@@ -60,6 +65,7 @@ class _ChatInputState extends State<ChatInput> {
       quality: 85,
       minWidth: 1920,
       minHeight: 1920,
+      rotate: rotation,
       autoCorrectionAngle: false,
       keepExif: false,
     );
@@ -68,6 +74,49 @@ class _ChatInputState extends State<ChatInput> {
       setState(() {
         _selectedImage = result != null ? File(result.path) : imageFile;
       });
+    }
+  }
+
+  /// Uygulanması gereken saat yönü (CW) rotasyonunu döndürür.
+  ///
+  /// Mantık: EXIF "90° döndür" diyorsa bile, kayıtlı buffer ZATEN dikeyse
+  /// (h > w) tag bayattır (multi-cam telefon pikseli donanımda döndürmüş ama
+  /// tag'ı silmemiş) → döndürme. Buffer hâlâ yataysa (w > h) rotasyon
+  /// gerçekten gereklidir → uygula. Bu en/boy oranı guard'ı, normal ve
+  /// multi-cam telefonların ürettiği "aynı görünen ama farklı" dosyaları
+  /// ayırt eden tek güvenilir sinyaldir.
+  ///
+  /// 180° ve flip'ler en/boy oranını değiştirmediği için ayırt edilemez;
+  /// bilinen arıza modu multi-cam'in bayat 180 tag'ı yazıp fotoyu baş aşağı
+  /// çevirmesiydi, o yüzden güvenli tarafta kalıp 0 döndürüyoruz.
+  Future<int> _resolveRotation(File file) async {
+    try {
+      final bytes = await file.readAsBytes();
+
+      // 1) EXIF orientation tag'ı (sadece okuma, döndürme yok).
+      final exifData = await readExifFromBytes(bytes);
+      final orientation = exifData['Image Orientation']?.printable ?? '';
+      if (orientation.isEmpty) return 0;
+
+      // 2) Gerçek (stored) buffer boyutu. ui.ImageDescriptor EXIF'i
+      //    UYGULAMADAN ham piksel boyutunu verir — guard için tam da bu lazım.
+      final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+      final descriptor = await ui.ImageDescriptor.encoded(buffer);
+      final isLandscapeBuffer = descriptor.width > descriptor.height;
+      descriptor.dispose();
+      buffer.dispose();
+
+      // CCW'yi önce kontrol et (string eşleşme çakışmasını önlemek için).
+      if (orientation.contains('90 CCW')) {
+        return isLandscapeBuffer ? 270 : 0;
+      }
+      if (orientation.contains('90 CW')) {
+        return isLandscapeBuffer ? 90 : 0;
+      }
+      return 0;
+    } catch (_) {
+      // EXIF/decoder hatasında döndürme yapma (en kötü ihtimalle no-op).
+      return 0;
     }
   }
 
@@ -278,16 +327,12 @@ class _ChatInputState extends State<ChatInput> {
   }
 
   Future<void> _pickImage(ImageSource source) async {
-    // maxWidth/maxHeight ŞART — plugin'in native kodu (iOS UIImage / Android
-    // BitmapFactory) EXIF orientation'ı piksele uygulayıp tag'ı strip eder.
-    // Bu olmadan multi-cam Android telefonlarda pre-rotated piksel + canlı
-    // EXIF tag çift rotasyona yol açıyor (dik foto ters çıkıyordu).
-    final pickedFile = await _imagePicker.pickImage(
-      source: source,
-      maxWidth: 2560,
-      maxHeight: 2560,
-      imageQuality: 95,
-    );
+    // maxWidth/maxHeight/imageQuality VERMİYORUZ: bunlar image_picker'ın
+    // dosyayı yeniden encode edip EXIF'i (telefona göre tutarsızca) işlemesine
+    // yol açar ve guard'ımızın okuyacağı ham tag'ı bozar. Ham dosyayı alıp
+    // orientation'ı _processAndSetImage içinde kendimiz normalize ediyoruz;
+    // boyut küçültme zaten FlutterImageCompress'te (minWidth/minHeight 1920).
+    final pickedFile = await _imagePicker.pickImage(source: source);
 
     if (pickedFile != null) {
       await _processAndSetImage(File(pickedFile.path));
