@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
@@ -77,7 +78,7 @@ class _ChatInputState extends State<ChatInput> {
     }
   }
 
-  /// Uygulanması gereken saat yönü (CW) rotasyonunu döndürür.
+  /// Uygulanması gereken saat yönü (CW) rotasyonunu (0 / 90 / 270) döndürür.
   ///
   /// Mantık: EXIF "90° döndür" diyorsa bile, kayıtlı buffer ZATEN dikeyse
   /// (h > w) tag bayattır (multi-cam telefon pikseli donanımda döndürmüş ama
@@ -86,38 +87,100 @@ class _ChatInputState extends State<ChatInput> {
   /// multi-cam telefonların ürettiği "aynı görünen ama farklı" dosyaları
   /// ayırt eden tek güvenilir sinyaldir.
   ///
-  /// 180° ve flip'ler en/boy oranını değiştirmediği için ayırt edilemez;
-  /// bilinen arıza modu multi-cam'in bayat 180 tag'ı yazıp fotoyu baş aşağı
-  /// çevirmesiydi, o yüzden güvenli tarafta kalıp 0 döndürüyoruz.
+  /// EXIF orientation SAYISAL (1..8) okunur; paketin İngilizce "Rotated 90 CW"
+  /// metnine bağlı kalmaz (string sadece yedek yol). Sadece 90'lık aile
+  /// (5/6/7/8) en/boy guard'ına girer:
+  ///   6,7 → 90° CW   |   5,8 → 270° CW (= 90° CCW)
+  ///
+  /// 180° ve saf ayna (EXIF 2/3/4) en/boy oranını DEĞİŞTİRMEZ, dolayısıyla
+  /// "bayat mı geçerli mi" ayırt edilemez; bilinen arıza modu multi-cam'in
+  /// bayat 180 tag'ı yazıp fotoyu baş aşağı çevirmesiydi, o yüzden güvenli
+  /// tarafta kalıp 0 (no-op) dönüyoruz. (5/7'deki ayna bileşeni de
+  /// FlutterImageCompress.rotate ile yapılamadığı için yok sayılır — çok nadir.)
   Future<int> _resolveRotation(File file) async {
+    int rotation = 0;
+    String reason = 'default';
     try {
       final bytes = await file.readAsBytes();
 
-      // 1) EXIF orientation tag'ı (sadece okuma, döndürme yok).
+      // 1) EXIF orientation → sayısal değer (1..8). Yoksa 1 (normal).
       final exifData = await readExifFromBytes(bytes);
-      final orientation = exifData['Image Orientation']?.printable ?? '';
-      if (orientation.isEmpty) return 0;
+      final orientation = _exifOrientation(exifData);
 
-      // 2) Gerçek (stored) buffer boyutu. ui.ImageDescriptor EXIF'i
-      //    UYGULAMADAN ham piksel boyutunu verir — guard için tam da bu lazım.
-      final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
-      final descriptor = await ui.ImageDescriptor.encoded(buffer);
-      final isLandscapeBuffer = descriptor.width > descriptor.height;
-      descriptor.dispose();
-      buffer.dispose();
+      if (orientation < 5) {
+        // 1 normal / 2 ayna / 3 180° / 4 dikey ayna → döndürme yok.
+        reason = 'exif=$orientation (90-dışı, güvenli no-op)';
+      } else {
+        // 2) Ham (stored) buffer en/boy oranı — EXIF UYGULANMADAN.
+        //    ui.ImageDescriptor her iki platformda da Skia ile çözer, yani
+        //    iOS/Android'de tutarlı ham boyut verir. Kaynaklar try/finally
+        //    ile her durumda serbest bırakılır.
+        bool? isLandscape;
+        ui.ImmutableBuffer? buffer;
+        ui.ImageDescriptor? descriptor;
+        try {
+          buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+          descriptor = await ui.ImageDescriptor.encoded(buffer);
+          isLandscape = descriptor.width > descriptor.height;
+        } catch (_) {
+          isLandscape = null; // decode edilemedi (bozuk/desteklenmeyen)
+        } finally {
+          descriptor?.dispose();
+          buffer?.dispose();
+        }
 
-      // CCW'yi önce kontrol et (string eşleşme çakışmasını önlemek için).
-      if (orientation.contains('90 CCW')) {
-        return isLandscapeBuffer ? 270 : 0;
+        if (isLandscape == null) {
+          reason = 'exif=$orientation, buffer decode edilemedi → no-op';
+        } else if (!isLandscape) {
+          // Buffer zaten dik → tag bayat (multi-cam) → döndürme.
+          reason = 'exif=$orientation, buffer portrait → bayat tag, no-op';
+        } else {
+          // Yatay buffer + 90'lık tag → rotasyon gerçekten gerekli.
+          rotation = (orientation == 6 || orientation == 7) ? 90 : 270;
+          reason = 'exif=$orientation, buffer landscape';
+        }
       }
-      if (orientation.contains('90 CW')) {
-        return isLandscapeBuffer ? 90 : 0;
-      }
-      return 0;
-    } catch (_) {
-      // EXIF/decoder hatasında döndürme yapma (en kötü ihtimalle no-op).
-      return 0;
+    } catch (e) {
+      // EXIF/IO hatasında döndürme yapma (en kötü ihtimalle no-op).
+      rotation = 0;
+      reason = 'hata: $e';
     }
+
+    if (kDebugMode) {
+      debugPrint('[orient] $reason → rotate $rotation');
+    }
+    return rotation;
+  }
+
+  /// EXIF orientation'ı SAYISAL (1..8) döndürür; tag yoksa 1 (normal).
+  ///
+  /// Birincil yol ham sayısal değerdir (`.values`) — exif paketinin
+  /// İngilizce metin sözlüğüne bağlı değildir, sürüm/lokalizasyon değişse
+  /// bile kırılmaz. Sayısal okuma başarısız olursa `.printable` metni çözülür
+  /// (yedek). Değer 1..8 aralığında değilse 1 kabul edilir.
+  int _exifOrientation(Map<String, IfdTag> exifData) {
+    final tag = exifData['Image Orientation'];
+    if (tag == null) return 1;
+
+    // Birincil: ham sayısal değer.
+    try {
+      final raw = tag.values.toList();
+      if (raw.isNotEmpty && raw.first is int) {
+        final v = raw.first as int;
+        if (v >= 1 && v <= 8) return v;
+      }
+    } catch (_) {
+      // sayısal okuma başarısız → string yedeğe düş.
+    }
+
+    // Yedek: printable metni (exif paketinin sözlüğü).
+    final p = tag.printable;
+    if (p.contains('180')) return 3;
+    if (p.contains('90 CCW')) return p.contains('Mirrored') ? 5 : 8;
+    if (p.contains('90 CW')) return p.contains('Mirrored') ? 7 : 6;
+    if (p.contains('Mirrored horizontal')) return 2;
+    if (p.contains('Mirrored vertical')) return 4;
+    return 1;
   }
 
   @override
