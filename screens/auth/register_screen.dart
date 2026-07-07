@@ -282,11 +282,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       prefixIcon: Icon(Icons.school_outlined),
                     ),
                     items: const [
-                      DropdownMenuItem(value: '7', child: Text('7. Sınıf')),
                       DropdownMenuItem(value: '8', child: Text('8. Sınıf')),
                       DropdownMenuItem(value: '9', child: Text('9. Sınıf')),
                       DropdownMenuItem(value: '10', child: Text('10. Sınıf')),
-                      DropdownMenuItem(value: '11', child: Text('11. Sınıf')),
+                      DropdownMenuItem(value: 'TYT', child: Text('TYT')),
+                      DropdownMenuItem(value: 'AYT', child: Text('AYT')),
                     ],
                     onChanged: (value) {
                       setState(() => _selectedClassLevel = value);

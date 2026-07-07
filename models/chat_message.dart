@@ -89,6 +89,7 @@ class ChatMessage {
   }
 
   ChatMessage copyWith({
+    String? id,
     String? text,
     String? imageBase64,
     String? imageUrl,
@@ -109,7 +110,7 @@ class ChatMessage {
     bool? thinkingDone,
   }) {
     return ChatMessage(
-      id: id,
+      id: id ?? this.id,
       type: type,
       text: text ?? this.text,
       imageBase64: imageBase64 ?? this.imageBase64,

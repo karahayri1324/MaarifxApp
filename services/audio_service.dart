@@ -12,9 +12,10 @@ class AudioService {
 
   String? _currentUrl;
   bool _isInitialized = false;
+  late final Future<void> _initFuture;
 
   AudioService() {
-    _init();
+    _initFuture = _init();
   }
 
   Future<void> _init() async {
@@ -34,6 +35,7 @@ class AudioService {
 
       // Listen to player state changes
       _player.playerStateStream.listen((state) {
+        if (_stateController.isClosed) return; // dispose sonrası add → crash
         _stateController.add(AudioServiceState(
           isPlaying: state.playing,
           processingState: state.processingState,
@@ -51,6 +53,8 @@ class AudioService {
 
   /// Play audio from URL or asset path
   Future<void> play(String url, {int startTimeMs = 0}) async {
+    // Init bitmeden gelen erken play çağrısı sessizce düşmesin — bekle.
+    await _initFuture;
     if (!_isInitialized) {
       debugPrint('[AudioService] Not initialized');
       return;
@@ -84,7 +88,7 @@ class AudioService {
       await _player.play();
     } catch (e) {
       debugPrint('[AudioService] Play error: $e');
-      _stateController.addError(e);
+      if (!_stateController.isClosed) _stateController.addError(e);
     }
   }
 

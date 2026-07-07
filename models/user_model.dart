@@ -18,14 +18,20 @@ class UserModel {
   });
 
   String get initials {
-    if (displayName != null && displayName!.isNotEmpty) {
-      final parts = displayName!.split(' ');
+    // Boş parçalara (çift boşluk, baş/son boşluk) karşı güvenli:
+    // "Ali  Veli" → parts[1] == '' → [0] RangeError olmasın.
+    final name = displayName?.trim() ?? '';
+    if (name.isNotEmpty) {
+      final parts =
+          name.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
       if (parts.length >= 2) {
         return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
       }
-      return displayName![0].toUpperCase();
+      if (parts.isNotEmpty) {
+        return parts[0][0].toUpperCase();
+      }
     }
-    return email[0].toUpperCase();
+    return email.isNotEmpty ? email[0].toUpperCase() : '?';
   }
 
   String get displayNameOrEmail => displayName ?? email.split('@')[0];
@@ -38,6 +44,8 @@ class UserModel {
     if (classLevel == '9') return '9. Sınıf';
     if (classLevel == '10') return '10. Sınıf';
     if (classLevel == '11') return '11. Sınıf';
+    if (classLevel == 'TYT') return 'TYT';
+    if (classLevel == 'AYT') return 'AYT';
     return '-';
   }
 

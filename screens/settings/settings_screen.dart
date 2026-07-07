@@ -89,9 +89,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final vdsService = context.read<ChatProvider>().vdsService;
     final authProvider = context.read<AuthProvider>();
     final success = await vdsService.updateProfile(classLevel: classLevel);
-    if (success && mounted && authProvider.user != null) {
+    if (!mounted) return;
+    if (success && authProvider.user != null) {
       authProvider.updateUser(
         authProvider.user!.copyWith(classLevel: classLevel),
+      );
+    } else if (!success) {
+      // Sessiz fail olmasın — kullanıcı seçiminin kaydedilmediğini bilsin
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Sınıf seviyesi güncellenemedi. Lütfen tekrar deneyin.'),
+          backgroundColor: AppTheme.danger,
+        ),
       );
     }
   }
@@ -315,6 +324,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onTap: () => themeProvider.toggleTheme(),
                     );
                   },
+                ),
+              ]),
+
+              const SizedBox(height: 28),
+
+              // ── Öğretmen ──
+              _sectionLabel(context, 'Öğretmen'),
+              _cardGroup(context, [
+                _tile(
+                  context,
+                  icon: Icons.favorite_outline_rounded,
+                  title: 'Samimiyet',
+                  subtitle: 'Öğretmen seninle ne kadar samimi konuşsun',
+                  child: _samimiyetDropdown(context, chatProvider),
+                ),
+                _divider(context),
+                _tileTap(
+                  context,
+                  icon: Icons.person_outline_rounded,
+                  title: 'Kendini Tanıt',
+                  subtitle: chatProvider.studentIntro.isEmpty
+                      ? 'Öğretmen seni tanısın diye birkaç kelime'
+                      : chatProvider.studentIntro,
+                  trailing: Icon(Icons.chevron_right_rounded,
+                      color: context.textMuted, size: 22),
+                  onTap: () => _editIntro(context, chatProvider),
                 ),
               ]),
 
@@ -647,15 +682,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
       icon: Icon(Icons.unfold_more_rounded,
           size: 18, color: context.textMuted),
       items: const [
-        DropdownMenuItem(value: '7', child: Text('7. Sınıf')),
         DropdownMenuItem(value: '8', child: Text('8. Sınıf')),
         DropdownMenuItem(value: '9', child: Text('9. Sınıf')),
         DropdownMenuItem(value: '10', child: Text('10. Sınıf')),
-        DropdownMenuItem(value: '11', child: Text('11. Sınıf')),
+        DropdownMenuItem(value: 'TYT', child: Text('TYT')),
+        DropdownMenuItem(value: 'AYT', child: Text('AYT')),
       ],
       onChanged: _updateClassLevel,
       hint: Text('Seç', style: TextStyle(color: context.textMuted)),
     );
+  }
+
+  Widget _samimiyetDropdown(BuildContext context, ChatProvider chatProvider) {
+    return DropdownButton<int>(
+      value: chatProvider.samimiyet.clamp(1, 4),
+      underline: const SizedBox(),
+      isDense: true,
+      style: TextStyle(fontSize: 14, color: context.textSecondary),
+      icon: Icon(Icons.unfold_more_rounded, size: 18, color: context.textMuted),
+      items: const [
+        DropdownMenuItem(value: 1, child: Text('Resmî')),
+        DropdownMenuItem(value: 2, child: Text('Dengeli')),
+        DropdownMenuItem(value: 3, child: Text('Samimi')),
+        DropdownMenuItem(value: 4, child: Text('Çok samimi')),
+      ],
+      onChanged: (v) {
+        if (v != null) chatProvider.setSamimiyet(v);
+      },
+    );
+  }
+
+  Future<void> _editIntro(BuildContext context, ChatProvider chatProvider) async {
+    final controller = TextEditingController(text: chatProvider.studentIntro);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Kendini Tanıt'),
+        content: TextField(
+          controller: controller,
+          maxLines: 4,
+          maxLength: 400,
+          decoration: const InputDecoration(
+            hintText:
+                'Örn. 10. sınıfım, sayısal seviyem orta, görsel anlatımı severim…',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Vazgeç'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text),
+            child: const Text('Kaydet'),
+          ),
+        ],
+      ),
+    );
+    if (result != null) {
+      await chatProvider.setStudentIntro(result);
+      if (mounted) setState(() {});
+    }
+    controller.dispose();
   }
 
   // ─────────────────────────────────────────────────────

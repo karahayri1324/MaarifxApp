@@ -10,12 +10,24 @@ import '../../config/app_config.dart';
 import '../../config/theme.dart';
 import '../../services/audio_service.dart';
 
-/// Data returned when user sends an annotation from PlayerScreen.
+/// PlayerScreen'den dönen takip-turu verisi.
+/// - Ekran görüntüsüyle soru (legacy): imageFile + text.
+/// - İşaretli bölge (kalem): markedRegion [x1,y1,x2,y2] 0-1000 + text (not).
+/// - Hint yanıtı: hintRef + text (yanıt); skip=true ise "Cevap vermek istemiyorum".
 class AnnotationResult {
-  final File imageFile;
+  final File? imageFile;
   final String text;
+  final List<int>? markedRegion;
+  final String? hintRef;
+  final bool skip;
 
-  AnnotationResult({required this.imageFile, required this.text});
+  AnnotationResult({
+    this.imageFile,
+    this.text = '',
+    this.markedRegion,
+    this.hintRef,
+    this.skip = false,
+  });
 }
 
 class PlayerScreen extends StatefulWidget {
@@ -126,6 +138,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
           if (mounted) setState(() => _isLoading = false);
         case 'annotationSend':
           _handleAnnotationSend(data);
+        case 'markedContent':
+          _handleMarkedContent(data);
+        case 'hintAnswer':
+          _handleHintAnswer(data);
         case 'closeRequest':
           // Canvas icindeki "Çözüme Bak" butonu — X'e basmakla ayni: ekrani kapat
           if (mounted) Navigator.of(context).pop();
@@ -141,13 +157,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (base64Str.isEmpty && text.isEmpty) return;
 
     try {
-      // Save base64 as temp file
-      final Uint8List bytes = base64Decode(base64Str);
-      final tempDir = await getTemporaryDirectory();
-      final tempFile = File(
-        '${tempDir.path}/annotation_${DateTime.now().millisecondsSinceEpoch}.png',
-      );
-      await tempFile.writeAsBytes(bytes);
+      // Save base64 as temp file (boş base64 → boş/bozuk görsel gönderme)
+      File? tempFile;
+      if (base64Str.isNotEmpty) {
+        final Uint8List bytes = base64Decode(base64Str);
+        final tempDir = await getTemporaryDirectory();
+        tempFile = File(
+          '${tempDir.path}/annotation_${DateTime.now().millisecondsSinceEpoch}.png',
+        );
+        await tempFile.writeAsBytes(bytes);
+      }
 
       // Pop with result
       if (mounted) {
@@ -160,7 +179,35 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
+  // İşaretli bölge (canvas kalemle): markedRegion [x1,y1,x2,y2] 0-1000 + not.
+  // Backend bunu önceki tur DSL'inden <isaretli_icerik>'e çözer; not → <ogrenci_sorusu>.
+  void _handleMarkedContent(Map<String, dynamic> data) {
+    final note = data['note'] as String? ?? '';
+    final raw = data['markedRegion'];
+    List<int>? region;
+    if (raw is List && raw.length == 4) {
+      region = raw.map((e) => (e as num).toInt()).toList();
+    }
+    if (region == null) return;
+    if (mounted) {
+      Navigator.of(context).pop(AnnotationResult(text: note, markedRegion: region));
+    }
+  }
+
+  // Hint yanıtı: hintRef + text (yanıt). skip=true → canvas zaten "Cevap vermek istemiyorum" yollar.
+  void _handleHintAnswer(Map<String, dynamic> data) {
+    final hintRef = data['hintRef'] as String? ?? '';
+    final text = data['text'] as String? ?? '';
+    final skip = data['skip'] as bool? ?? false;
+    if (mounted) {
+      Navigator.of(context).pop(
+        AnnotationResult(text: text, hintRef: hintRef.isNotEmpty ? hintRef : null, skip: skip),
+      );
+    }
+  }
+
   void _handleImageLoaded(Map<String, dynamic> data) {
+    if (!mounted) return;
     final w = (data['width'] as num?)?.toInt() ?? 0;
     final h = (data['height'] as num?)?.toInt() ?? 0;
     if (w > 0 && h > 0) {

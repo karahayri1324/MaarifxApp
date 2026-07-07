@@ -280,6 +280,12 @@ class VdsService {
     String? studentName,
     bool drawOnImage = true,
     bool enableThinking = true,
+    String model = '3.0',
+    int? samimiyet,
+    String? studentIntro,
+    List<int>? markedRegion,
+    String? hintRef,
+    String? studentQuestion,
   }) async {
     try {
       final uri = Uri.parse('$_baseUrl${AppConfig.messagesEndpoint}');
@@ -296,11 +302,29 @@ class VdsService {
       request.fields['detailLevel'] = detailLevel.toString();
       request.fields['drawOnImage'] = drawOnImage.toString();
       request.fields['enableThinking'] = enableThinking.toString();
+      request.fields['model'] = model;
       if (classLevel != null) {
         request.fields['classLevel'] = classLevel;
       }
       if (studentName != null && studentName.isNotEmpty) {
         request.fields['studentName'] = studentName;
+      }
+      // Etkileşim alanları: samimiyet, kendini-tanıt, işaretli bölge, Hint yanıtı.
+      if (samimiyet != null) {
+        request.fields['samimiyet'] = samimiyet.toString();
+      }
+      if (studentIntro != null && studentIntro.isNotEmpty) {
+        request.fields['studentIntro'] = studentIntro;
+      }
+      if (markedRegion != null && markedRegion.length == 4) {
+        request.fields['markedRegion'] = jsonEncode(markedRegion);
+      }
+      if (hintRef != null && hintRef.isNotEmpty) {
+        request.fields['hintRef'] = hintRef;
+      }
+      // İşaretli bölge takip notu → sunucu studentQuestion → <ogrenci_sorusu>
+      if (studentQuestion != null && studentQuestion.isNotEmpty) {
+        request.fields['studentQuestion'] = studentQuestion;
       }
 
       if (imageFile != null) {
@@ -513,6 +537,12 @@ class VdsService {
     String? studentName,
     bool drawOnImage = true,
     bool enableThinking = true,
+    String model = '3.0',
+    int? samimiyet,
+    String? studentIntro,
+    List<int>? markedRegion,
+    String? hintRef,
+    String? studentQuestion,
   }) async {
     try {
       final uri = Uri.parse('$_baseUrl${AppConfig.guestMessageEndpoint}');
@@ -531,11 +561,28 @@ class VdsService {
       request.fields['detailLevel'] = detailLevel.toString();
       request.fields['drawOnImage'] = drawOnImage.toString();
       request.fields['enableThinking'] = enableThinking.toString();
+      request.fields['model'] = model;
       if (classLevel != null) {
         request.fields['classLevel'] = classLevel;
       }
       if (studentName != null && studentName.isNotEmpty) {
         request.fields['studentName'] = studentName;
+      }
+      if (samimiyet != null) {
+        request.fields['samimiyet'] = samimiyet.toString();
+      }
+      if (studentIntro != null && studentIntro.isNotEmpty) {
+        request.fields['studentIntro'] = studentIntro;
+      }
+      if (markedRegion != null && markedRegion.length == 4) {
+        request.fields['markedRegion'] = jsonEncode(markedRegion);
+      }
+      if (hintRef != null && hintRef.isNotEmpty) {
+        request.fields['hintRef'] = hintRef;
+      }
+      // İşaretli bölge takip notu → sunucu studentQuestion → <ogrenci_sorusu>
+      if (studentQuestion != null && studentQuestion.isNotEmpty) {
+        request.fields['studentQuestion'] = studentQuestion;
       }
 
       if (imageFile != null) {
@@ -590,13 +637,28 @@ class VdsService {
   void connectWebSocket() {
     if (_isDisposed || _authToken == null) return;
 
+    // Eski kanal varsa önce kapat — çift bağlantı ve leak önlenir.
+    // _channel'ı ÖNCE null'a çekiyoruz ki eski kanalın onDone'u
+    // (aşağıdaki identity guard sayesinde) reconnect tetiklemesin.
+    final old = _channel;
+    if (old != null) {
+      _channel = null;
+      try {
+        old.sink.close();
+      } catch (_) {
+        // ignore
+      }
+    }
+
     final wsUrl = '${AppConfig.wsUrl}${AppConfig.wsEndpoint(_authToken!)}';
 
     try {
-      _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
+      final channel = WebSocketChannel.connect(Uri.parse(wsUrl));
+      _channel = channel;
 
-      _channel!.stream.listen(
+      channel.stream.listen(
         (message) {
+          if (_channel != channel) return; // stale kanal — yok say
           if (!_isConnected) {
             _isConnected = true;
             _reconnectAttempt = 0;
@@ -606,16 +668,16 @@ class VdsService {
           _handleMessage(message);
         },
         onError: (error) {
-          _handleDisconnect();
+          if (_channel == channel) _handleDisconnect();
         },
         onDone: () {
-          _handleDisconnect();
+          if (_channel == channel) _handleDisconnect();
         },
       );
 
       // Bağlantı bekleme
       Future.delayed(const Duration(milliseconds: 500), () {
-        if (_channel != null && !_isConnected && !_isDisposed) {
+        if (_channel == channel && !_isConnected && !_isDisposed) {
           _isConnected = true;
           _connectionController.add(true);
           _startPingTimer();
@@ -690,7 +752,10 @@ class VdsService {
   /// İlk 5 deneme 3s, sonra 5s → 12s → 30s → 60s (max)
   Duration _getReconnectDelay() {
     if (_reconnectAttempt <= 5) return const Duration(seconds: 3);
-    final seconds = (5 * math.pow(2.5, _reconnectAttempt - 6)).round().clamp(5, 60);
+    // exp clamp: çok uzun kopukluklarda pow() sonucu int64'ü aşıp
+    // round()'un patlamasını önler (sonuç zaten 60'a clamp'leniyor)
+    final exp = (_reconnectAttempt - 6).clamp(0, 8);
+    final seconds = (5 * math.pow(2.5, exp)).round().clamp(5, 60);
     return Duration(seconds: seconds);
   }
 

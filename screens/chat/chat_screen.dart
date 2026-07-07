@@ -30,6 +30,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _scrollController = ScrollController();
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   bool _guestInitializing = false;
+  bool _serverCheckInFlight = false;
   StreamSubscription? _shareSubscription;
   File? _sharedImage;
 
@@ -309,10 +310,29 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final chatProvider = context.read<ChatProvider>();
     final authProvider = context.read<AuthProvider>();
 
+    // Takip turu türüne göre prompt + alanlar:
+    // - Hint yanıtı: prompt = yanıt (boşsa "Cevap vermek istemiyorum"), hintRef ile.
+    // - İşaretli bölge: prompt = not (boşsa varsayılan), markedRegion ile (görsel GÖNDERİLMEZ — §12).
+    // - Legacy ekran-görüntüsü: imageFile + text.
+    String? followupPrompt;     // → text → <soru>
+    String? studentQuestion;    // → <ogrenci_sorusu> (işaretli bölge takip notu)
+    if (annotation.hintRef != null) {
+      // Hint yanıtı: prompt = yanıt; processor hintRef+prompt'tan ogrenci_yanitlari kurar.
+      followupPrompt = annotation.text.isNotEmpty ? annotation.text : 'Cevap vermek istemiyorum';
+    } else if (annotation.markedRegion != null) {
+      // İşaretli bölge: not → <ogrenci_sorusu> (web ile simetri). <soru> orijinal soru olarak history'de kalır.
+      studentQuestion = annotation.text.isNotEmpty ? annotation.text : 'İşaretlediğim yeri açıklar mısın?';
+    } else {
+      // Legacy ekran-görüntüsü takip: prompt olarak.
+      followupPrompt = annotation.text.isNotEmpty ? annotation.text : 'Bu kısmı anlayamadım, açıklar mısın?';
+    }
     final result = await chatProvider.sendMessage(
       imageFile: annotation.imageFile,
-      prompt: annotation.text.isNotEmpty ? annotation.text : 'Bu kısmı anlayamadım, açıklar mısın?',
+      prompt: followupPrompt,
       classLevel: authProvider.user?.classLevel,
+      markedRegion: annotation.markedRegion,
+      hintRef: annotation.hintRef,
+      studentQuestion: studentQuestion,
     );
     _scrollToBottom(force: true);
 
@@ -358,9 +378,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       body: Consumer<ChatProvider>(
         builder: (context, chatProvider, child) {
           // Show server error dialog if needed
-          if (!chatProvider.serverReachable && !chatProvider.isProcessing) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              chatProvider.checkServerConnection();
+          // In-flight guard: her rebuild yeni bir kontrol yığmasın
+          if (!chatProvider.serverReachable &&
+              !chatProvider.isProcessing &&
+              !_serverCheckInFlight) {
+            _serverCheckInFlight = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) async {
+              await chatProvider.checkServerConnection();
+              _serverCheckInFlight = false;
             });
           }
 
@@ -479,7 +504,37 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
   }
 
+  /// AppBar model rozetinden açılan model seçici (ChatInput sheet'i ile
+  /// aynı ModelSelector'ı, dolayısıyla aynı provider state'ini kullanır)
+  void _showModelSheet() {
+    showModalBottomSheet(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: context.borderColor,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const ModelSelector(),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
   PreferredSizeWidget _buildAppBar(BuildContext context, bool isGuest) {
+    // select: yalnız model değişince rebuild (watch tüm token stream'inde AppBar'ı yeniden çizerdi)
+    final isMax = context.select<ChatProvider, bool>((p) => p.model == '3.0-max');
+
     return AppBar(
       backgroundColor: context.bgPrimary,
       elevation: 0,
@@ -490,36 +545,74 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               onPressed: () => _scaffoldKey.currentState?.openDrawer(),
             ),
       automaticallyImplyLeading: false,
-      title: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
-              color: context.bgSecondary,
-              boxShadow: AppTheme.shadowSm,
-            ),
-            padding: const EdgeInsets.all(5),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(5),
-              child: Image.asset(
-                'assets/images/karahayri.png',
-                fit: BoxFit.contain,
+      title: GestureDetector(
+        onTap: _showModelSheet,
+        behavior: HitTestBehavior.opaque,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                color: context.bgSecondary,
+                boxShadow: AppTheme.shadowSm,
+              ),
+              padding: const EdgeInsets.all(5),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(5),
+                child: Image.asset(
+                  'assets/images/karahayri.png',
+                  fit: BoxFit.contain,
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            'MaariFx',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: context.textPrimary,
+            const SizedBox(width: 10),
+            Text(
+              'MaariFx',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: context.textPrimary,
+              ),
             ),
-          ),
-        ],
+            const SizedBox(width: 6),
+            // Model rozeti: standartta '3.0', MAX aktifken gradient 'MAX'
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                gradient: isMax
+                    ? const LinearGradient(
+                        colors: [AppTheme.primary, AppTheme.primaryDark],
+                      )
+                    : null,
+                color: isMax ? null : AppTheme.primary.withOpacity(0.1),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    isMax ? 'MAX' : '3.0',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.5,
+                      color: isMax ? Colors.white : AppTheme.primary,
+                    ),
+                  ),
+                  Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    size: 14,
+                    color: isMax ? Colors.white : AppTheme.primary,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
       actions: isGuest
           ? [

@@ -23,6 +23,9 @@ class ChatProvider extends ChangeNotifier {
   bool _showStepData = false;
   bool _drawOnImage = true;
   bool _enableThinking = true;
+  int _samimiyet = 2;          // 1=resmî … 4=çok samimi (USER_TEMPLATE <SamimiyetSeviyesi>)
+  String _studentIntro = '';   // öğrencinin kendini tanıtması (USER_TEMPLATE tanitim)
+  String _model = '3.0';       // '3.0' | '3.0-max' (MAX yalnızca drawOnImage açıkken)
 
   // Conversation
   String? _currentConversationId;
@@ -37,10 +40,17 @@ class ChatProvider extends ChangeNotifier {
   StreamSubscription? _messageSubscription;
   StreamSubscription? _connectionSubscription;
 
+  // Eşzamanlı gönderimlerde temp-id çakışmasın (aynı ms'de iki send)
+  static int _tempSeq = 0;
+
   int get detailLevel => _detailLevel;
   bool get showStepData => _showStepData;
   bool get drawOnImage => _drawOnImage;
   bool get enableThinking => _enableThinking;
+  int get samimiyet => _samimiyet;
+  String get studentIntro => _studentIntro;
+  String get model => _model;
+  bool get isGuestUser => _isGuest;
   bool get serverReachable => _serverReachable;
   bool get hasInternet => _hasInternet;
   String? get currentConversationId => _currentConversationId;
@@ -53,6 +63,12 @@ class ChatProvider extends ChangeNotifier {
   }
 
   void setAuth(String? userId, String? token, {bool isGuest = false, String? deviceId, String? displayName}) {
+    // Kullanıcı değiştiyse (guest→login, hesap değişimi) eski kullanıcının
+    // mesajları ve conversationId'si taşınmasın — yanlış hesaba mesaj
+    // eklenmesini / sunucunun yabancı conversationId reddetmesini önler.
+    if (_userId != null && _userId != userId) {
+      clearChat();
+    }
     _userId = userId;
     _isGuest = isGuest;
     _deviceId = deviceId;
@@ -79,10 +95,43 @@ class ChatProvider extends ChangeNotifier {
 
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    _detailLevel = prefs.getInt('detailLevel') ?? 3;
+    // clamp: eski sürümden kalan aralık-dışı değer UI'da RangeError yapmasın
+    _detailLevel = (prefs.getInt('detailLevel') ?? 3).clamp(1, 5);
     _showStepData = prefs.getBool('showStepData') ?? false;
     _drawOnImage = prefs.getBool('drawOnImage') ?? true;
     _enableThinking = prefs.getBool('enableThinking') ?? true;
+    _samimiyet = (prefs.getInt('samimiyet') ?? 2).clamp(1, 4);
+    _studentIntro = prefs.getString('studentIntro') ?? '';
+    _model = prefs.getString('modelVersion') ?? '3.0';
+    // MAX yalnızca çizim modu açıkken geçerli — kapalıysa normalize et
+    if (_model == '3.0-max' && !_drawOnImage) {
+      _model = '3.0';
+      await prefs.setString('modelVersion', _model);
+    }
+    notifyListeners();
+  }
+
+  Future<void> setModel(String m) async {
+    final normalized = m == '3.0-max' ? '3.0-max' : '3.0';
+    // MAX: çizim modu açık + giriş yapılmış olmalı (sunucu misafirde MAX'ı zaten reddeder)
+    if (normalized == '3.0-max' && (!_drawOnImage || _isGuest)) return;
+    _model = normalized;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('modelVersion', _model);
+    notifyListeners();
+  }
+
+  Future<void> setSamimiyet(int level) async {
+    _samimiyet = level.clamp(1, 4);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('samimiyet', _samimiyet);
+    notifyListeners();
+  }
+
+  Future<void> setStudentIntro(String value) async {
+    _studentIntro = value.trim();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('studentIntro', _studentIntro);
     notifyListeners();
   }
 
@@ -104,6 +153,11 @@ class ChatProvider extends ChangeNotifier {
     _drawOnImage = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('drawOnImage', _drawOnImage);
+    // Çizim kapatılınca MAX seçilemez — otomatik '3.0'a dön
+    if (!value && _model == '3.0-max') {
+      _model = '3.0';
+      await prefs.setString('modelVersion', _model);
+    }
     notifyListeners();
   }
 
@@ -225,8 +279,9 @@ class ChatProvider extends ChangeNotifier {
     if (requestId == null || !_activeRequests.contains(requestId)) return;
 
     final msgIndex = _findAiMsgIndex(requestId);
-    if (msgIndex != -1) {
+    if (msgIndex != -1 && !messages[msgIndex].hasSessionData) {
       messages[msgIndex].hasSessionData = true;
+      notifyListeners();
     }
   }
 
@@ -372,13 +427,38 @@ class ChatProvider extends ChangeNotifier {
     File? imageFile,
     String? prompt,
     String? classLevel,
+    List<int>? markedRegion,   // işaretli bölge [x1,y1,x2,y2] 0-1000 (takip turu)
+    String? hintRef,           // Hint yanıtı ref (takip turu)
+    String? studentQuestion,   // işaretli bölge takip notu → <ogrenci_sorusu>
   }) async {
     // Coklu request: bloklama yok
+
+    String? imageBase64ForDisplay;
+    if (imageFile != null) {
+      final bytes = await imageFile.readAsBytes();
+      imageBase64ForDisplay = base64Encode(bytes);
+    }
+
+    // Optimistik user mesajı: yükleme sürerken 'sending' olarak görünür,
+    // başarıda gerçek id/requestId ile güncellenir, hata yollarında kaldırılır.
+    // Temp id yalnızca user mesajında kullanılır (_findAiMsgIndex etkilenmez).
+    final tempId = 'temp_${DateTime.now().microsecondsSinceEpoch}_${_tempSeq++}';
+    messages.add(ChatMessage(
+      id: tempId,
+      type: MessageType.user,
+      text: (prompt != null && prompt.isNotEmpty) ? prompt : (studentQuestion ?? ''),
+      imageBase64: imageBase64ForDisplay,
+      status: MessageStatus.sending,
+    ));
+    notifyListeners();
+
+    void removeTempMessage() => messages.removeWhere((m) => m.id == tempId);
 
     // Check internet first
     final hasNet = await checkInternetConnection();
     if (!hasNet) {
       _serverReachable = false;
+      removeTempMessage();
       _addErrorMessage(
           'İnternet bağlantısı bulunamadı. Lütfen Wi-Fi veya mobil veri bağlantınızı kontrol edip tekrar deneyin.',
           imageFile: imageFile, prompt: prompt, classLevel: classLevel);
@@ -389,6 +469,7 @@ class ChatProvider extends ChangeNotifier {
     final status = await _vdsService.checkStatus();
     if (status == null) {
       _serverReachable = false;
+      removeTempMessage();
       _addErrorMessage(
           'Sunucuya ulaşılamıyor. Sunucu bakım altında olabilir, lütfen birkaç dakika sonra tekrar deneyin.',
           imageFile: imageFile, prompt: prompt, classLevel: classLevel);
@@ -398,12 +479,6 @@ class ChatProvider extends ChangeNotifier {
     _serverReachable = true;
 
     notifyListeners();
-
-    String? imageBase64ForDisplay;
-    if (imageFile != null) {
-      final bytes = await imageFile.readAsBytes();
-      imageBase64ForDisplay = base64Encode(bytes);
-    }
 
     // VDS'ye mesaj gönder (guest veya normal)
     SendMessageResult? result;
@@ -419,6 +494,12 @@ class ChatProvider extends ChangeNotifier {
           studentName: _displayName,
           drawOnImage: _drawOnImage,
           enableThinking: _enableThinking,
+          samimiyet: _samimiyet,
+          studentIntro: _studentIntro.isNotEmpty ? _studentIntro : null,
+          markedRegion: markedRegion,
+          hintRef: hintRef,
+          studentQuestion: studentQuestion,
+          model: _model,
         );
       } else {
         result = await _vdsService.sendMessage(
@@ -430,9 +511,16 @@ class ChatProvider extends ChangeNotifier {
           studentName: _displayName,
           drawOnImage: _drawOnImage,
           enableThinking: _enableThinking,
+          samimiyet: _samimiyet,
+          studentIntro: _studentIntro.isNotEmpty ? _studentIntro : null,
+          markedRegion: markedRegion,
+          hintRef: hintRef,
+          studentQuestion: studentQuestion,
+          model: _model,
         );
       }
     } on RateLimitException catch (e) {
+      removeTempMessage();
       _addErrorMessage(_getRateLimitMessage(e),
           imageFile: imageFile, prompt: prompt, classLevel: classLevel);
       notifyListeners();
@@ -440,6 +528,7 @@ class ChatProvider extends ChangeNotifier {
     }
 
     if (result == null) {
+      removeTempMessage();
       _addErrorMessage(
           'Mesaj gönderilemedi. Bağlantınızı kontrol edip tekrar deneyin.',
           imageFile: imageFile, prompt: prompt, classLevel: classLevel);
@@ -450,15 +539,27 @@ class ChatProvider extends ChangeNotifier {
     _currentConversationId = result.conversationId;
     _activeRequests.add(result.requestId);
 
-    messages.add(ChatMessage(
-      id: result.userMessageId,
-      type: MessageType.user,
-      text: prompt ?? '',
-      imageBase64: imageBase64ForDisplay,
-      status: MessageStatus.complete,
-      requestId: result.requestId,
-      conversationId: result.conversationId,
-    ));
+    // Optimistik mesajı gerçek değerlerle güncelle — yeni user mesajı EKLENMEZ
+    final tempIndex = messages.indexWhere((m) => m.id == tempId);
+    if (tempIndex != -1) {
+      messages[tempIndex] = messages[tempIndex].copyWith(
+        id: result.userMessageId,
+        status: MessageStatus.complete,
+        requestId: result.requestId,
+        conversationId: result.conversationId,
+      );
+    } else {
+      // Temp mesaj bu arada silindiyse (örn. clearChat) eski davranışa dön
+      messages.add(ChatMessage(
+        id: result.userMessageId,
+        type: MessageType.user,
+        text: (prompt != null && prompt.isNotEmpty) ? prompt : (studentQuestion ?? ''),
+        imageBase64: imageBase64ForDisplay,
+        status: MessageStatus.complete,
+        requestId: result.requestId,
+        conversationId: result.conversationId,
+      ));
+    }
 
     messages.add(ChatMessage(
       id: result.aiMessageId,
@@ -526,8 +627,12 @@ class ChatProvider extends ChangeNotifier {
     if (step < 0 || step >= msg.stepImages.length) return;
 
     msg.currentStep = step;
+    // stepOnlyImages her akışta doldurulmaz — indeks yoksa stepImages'a düş
+    final stepOnly = (_showStepData && step < msg.stepOnlyImages.length)
+        ? msg.stepOnlyImages[step]
+        : null;
     msg.imageBase64 =
-        _showStepData ? msg.stepOnlyImages[step] : msg.stepImages[step];
+        (stepOnly != null && stepOnly.isNotEmpty) ? stepOnly : msg.stepImages[step];
 
     notifyListeners();
   }

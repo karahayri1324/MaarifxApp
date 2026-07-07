@@ -32,8 +32,15 @@ class _ChatInputState extends State<ChatInput> {
   final _textController = TextEditingController();
   final _imagePicker = ImagePicker();
   File? _selectedImage;
+  bool _isPreparingImage = false;
+  bool _drawOnImage = true; // build'de ChatProvider'dan senkronlanır
 
-  bool get _canSend => widget.enabled && _selectedImage != null;
+  // Çizim modu AÇIK → görsel zorunlu; KAPALI → görsel veya metin yeterli.
+  bool get _canSend {
+    if (!widget.enabled || _isPreparingImage) return false;
+    if (_drawOnImage) return _selectedImage != null;
+    return _selectedImage != null || _textController.text.trim().isNotEmpty;
+  }
 
   @override
   void didUpdateWidget(covariant ChatInput oldWidget) {
@@ -41,7 +48,11 @@ class _ChatInputState extends State<ChatInput> {
     if (widget.externalImage != null &&
         widget.externalImage != oldWidget.externalImage) {
       _processAndSetImage(widget.externalImage!);
-      widget.onExternalImageConsumed?.call();
+      // didUpdateWidget build fazında çalışır; parent'ta hemen setState
+      // çağırmak "setState() called during build" hatası üretir — ertele.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onExternalImageConsumed?.call();
+      });
     }
   }
 
@@ -54,27 +65,32 @@ class _ChatInputState extends State<ChatInput> {
   /// gerçek piksel oranını karşılaştırıp uygulanacak açıyı kendimiz
   /// hesaplar, FlutterImageCompress'e sabit `rotate` olarak veririz.
   Future<void> _processAndSetImage(File imageFile) async {
-    final tempDir = await getTemporaryDirectory();
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    final compressedPath = '${tempDir.path}/maarifx_$ts.jpg';
+    if (mounted) setState(() => _isPreparingImage = true);
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final compressedPath = '${tempDir.path}/maarifx_$ts.jpg';
 
-    final rotation = await _resolveRotation(imageFile);
+      final rotation = await _resolveRotation(imageFile);
 
-    final result = await FlutterImageCompress.compressAndGetFile(
-      imageFile.path,
-      compressedPath,
-      quality: 85,
-      minWidth: 1920,
-      minHeight: 1920,
-      rotate: rotation,
-      autoCorrectionAngle: false,
-      keepExif: false,
-    );
+      final result = await FlutterImageCompress.compressAndGetFile(
+        imageFile.path,
+        compressedPath,
+        quality: 85,
+        minWidth: 1920,
+        minHeight: 1920,
+        rotate: rotation,
+        autoCorrectionAngle: false,
+        keepExif: false,
+      );
 
-    if (mounted) {
-      setState(() {
-        _selectedImage = result != null ? File(result.path) : imageFile;
-      });
+      if (mounted) {
+        setState(() {
+          _selectedImage = result != null ? File(result.path) : imageFile;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _isPreparingImage = false);
     }
   }
 
@@ -191,6 +207,9 @@ class _ChatInputState extends State<ChatInput> {
 
   @override
   Widget build(BuildContext context) {
+    // Gönderim kuralları drawOnImage'a bağlı — provider'ı izle, state'i taşı
+    _drawOnImage = context.watch<ChatProvider>().drawOnImage;
+
     return Container(
       padding: EdgeInsets.only(
         left: 16,
@@ -207,8 +226,8 @@ class _ChatInputState extends State<ChatInput> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Image Preview
-          if (_selectedImage != null) _buildImagePreview(),
+          // Image Preview (hazırlanırken placeholder gösterilir)
+          if (_selectedImage != null || _isPreparingImage) _buildImagePreview(),
 
           // Input Row
           Container(
@@ -232,7 +251,9 @@ class _ChatInputState extends State<ChatInput> {
                   child: TextField(
                     controller: _textController,
                     decoration: InputDecoration(
-                      hintText: 'Mesajınızı yazın...',
+                      hintText: _drawOnImage
+                          ? 'Fotoğraf ekle, istersen not yaz...'
+                          : 'Mesajını yaz...',
                       hintStyle: TextStyle(color: context.textMuted),
                       border: InputBorder.none,
                       contentPadding:
@@ -250,6 +271,10 @@ class _ChatInputState extends State<ChatInput> {
                     onSubmitted: (_) => _sendMessage(),
                   ),
                 ),
+
+                // Model çipi ('3.0 ⌄' / '3.0 MAX ⌄') — gönder butonunun solunda
+                _ModelChip(onTap: _showModelSheet),
+                const SizedBox(width: 4),
 
                 // Send Button
                 _buildSendButton(),
@@ -272,24 +297,39 @@ class _ChatInputState extends State<ChatInput> {
       ),
       child: Row(
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-            child: Image.file(
-              _selectedImage!,
-              width: 60,
-              height: 60,
-              fit: BoxFit.cover,
+          if (_isPreparingImage) ...[
+            const _PreparingImagePlaceholder(),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Görsel hazırlanıyor...',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: context.textSecondary,
+                ),
+              ),
             ),
-          ),
-          const Spacer(),
-          IconButton(
-            onPressed: () => setState(() => _selectedImage = null),
-            icon: const Icon(Icons.close),
-            style: IconButton.styleFrom(
-              backgroundColor: AppTheme.danger,
-              foregroundColor: Colors.white,
+          ] else ...[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+              child: Image.file(
+                _selectedImage!,
+                width: 60,
+                height: 60,
+                fit: BoxFit.cover,
+              ),
             ),
-          ),
+            const Spacer(),
+            IconButton(
+              onPressed: () => setState(() => _selectedImage = null),
+              icon: const Icon(Icons.close),
+              style: IconButton.styleFrom(
+                backgroundColor: AppTheme.danger,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -316,6 +356,33 @@ class _ChatInputState extends State<ChatInput> {
       style: IconButton.styleFrom(
         backgroundColor: _canSend ? AppTheme.primary : context.bgTertiary,
         foregroundColor: _canSend ? Colors.white : context.textMuted,
+      ),
+    );
+  }
+
+  /// Composer çipinden açılan model seçici — chat_screen'deki _showModelSheet
+  /// kalıbıyla birebir aynı sheet (drag handle + ModelSelector).
+  void _showModelSheet() {
+    showModalBottomSheet(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: context.borderColor,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const ModelSelector(),
+            const SizedBox(height: 16),
+          ],
+        ),
       ),
     );
   }
@@ -403,7 +470,23 @@ class _ChatInputState extends State<ChatInput> {
   }
 
   void _sendMessage() {
-    if (!_canSend) return;
+    if (!_canSend) {
+      // Buton zaten disabled; klavyeden Enter ile gelen denemeyi bilgilendir
+      if (widget.enabled &&
+          !_isPreparingImage &&
+          _drawOnImage &&
+          _selectedImage == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content:
+                Text('Soru Üzerine Çizim açık — fotoğraf eklemek zorunlu'),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
 
     widget.onSend(_selectedImage, _textController.text.trim());
 
@@ -634,6 +717,272 @@ class _DetailLevelSelector extends StatelessWidget {
             }),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Görsel sıkıştırılırken önizleme alanında gösterilen pulse placeholder
+class _PreparingImagePlaceholder extends StatefulWidget {
+  const _PreparingImagePlaceholder();
+
+  @override
+  State<_PreparingImagePlaceholder> createState() =>
+      _PreparingImagePlaceholderState();
+}
+
+class _PreparingImagePlaceholderState extends State<_PreparingImagePlaceholder>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 800),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: Tween<double>(begin: 0.35, end: 1.0).animate(
+        CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+      ),
+      child: Container(
+        width: 60,
+        height: 60,
+        decoration: BoxDecoration(
+          color: AppTheme.primary.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        ),
+        child: const Icon(
+          Icons.image_outlined,
+          color: AppTheme.primary,
+          size: 26,
+        ),
+      ),
+    );
+  }
+}
+
+/// Composer sağ-altındaki kompakt model çipi: '3.0 ⌄', MAX seçiliyken
+/// '3.0 MAX ⌄' (AppBar'daki MAX rozetiyle aynı gradient vurgu).
+/// select: yalnız model değişince rebuild (watch her token'da yeniden çizerdi)
+class _ModelChip extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _ModelChip({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final model = context.select<ChatProvider, String>((p) => p.model);
+    final isMax = model == '3.0-max';
+
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          gradient: isMax
+              ? const LinearGradient(
+                  colors: [AppTheme.primary, AppTheme.primaryDark],
+                )
+              : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              isMax ? '3.0 MAX' : '3.0',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: isMax ? FontWeight.w700 : FontWeight.w500,
+                letterSpacing: isMax ? 0.5 : 0,
+                color: isMax ? Colors.white : context.textMuted,
+              ),
+            ),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 15,
+              color: isMax ? Colors.white : context.textMuted,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Model secici (3.0 / 3.0 MAX) — bottom sheet ve AppBar'dan ortak kullanılır
+class ModelSelector extends StatelessWidget {
+  const ModelSelector({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final chatProvider = context.watch<ChatProvider>();
+    final model = chatProvider.model;
+    final drawOn = chatProvider.drawOnImage;
+    final isGuest = chatProvider.isGuestUser;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.auto_awesome_rounded,
+                  size: 18, color: context.textSecondary),
+              const SizedBox(width: 8),
+              Text(
+                'Model',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: context.textPrimary,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                model == '3.0-max' ? '3.0 MAX' : '3.0',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: AppTheme.primary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _ModelOption(
+            title: '3.0',
+            subtitle: 'Standart — hızlı ve dengeli çözüm',
+            selected: model == '3.0',
+            enabled: true,
+            onTap: () => chatProvider.setModel('3.0'),
+          ),
+          const SizedBox(height: 8),
+          _ModelOption(
+            title: '3.0',
+            subtitle: isGuest
+                ? 'Giriş yapınca kullanılabilir'
+                : (drawOn
+                    ? 'Derin çözümleme — daha yavaş, daha isabetli'
+                    : 'Soru Üzerine Çizim açıkken kullanılabilir'),
+            selected: model == '3.0-max',
+            enabled: drawOn && !isGuest,
+            isMax: true,
+            onTap: () => chatProvider.setModel('3.0-max'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ModelOption extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final bool selected;
+  final bool enabled;
+  final bool isMax;
+  final VoidCallback onTap;
+
+  const _ModelOption({
+    required this.title,
+    required this.subtitle,
+    required this.selected,
+    required this.enabled,
+    this.isMax = false,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Opacity(
+      opacity: enabled ? 1.0 : 0.5,
+      child: GestureDetector(
+        onTap: enabled ? onTap : null,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppTheme.primary.withOpacity(0.08)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: selected ? AppTheme.primary : context.borderColor,
+              width: selected ? 1.5 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          title,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: context.textPrimary,
+                          ),
+                        ),
+                        if (isMax) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [
+                                  AppTheme.primary,
+                                  AppTheme.primaryDark,
+                                ],
+                              ),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              'MAX',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.5,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: context.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (!enabled)
+                Icon(Icons.lock_outline_rounded,
+                    size: 16, color: context.textMuted)
+              else if (selected)
+                const Icon(Icons.check_circle_rounded,
+                    size: 18, color: AppTheme.primary),
+            ],
+          ),
+        ),
       ),
     );
   }

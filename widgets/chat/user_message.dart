@@ -13,6 +13,8 @@ class UserMessageWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isSending = message.status == MessageStatus.sending;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.end,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -39,10 +41,31 @@ class UserMessageWidget extends StatelessWidget {
                 if (message.imageBase64 != null) ...[
                   ClipRRect(
                     borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-                    child: Image.memory(
-                      base64Decode(message.imageBase64!),
-                      fit: BoxFit.contain,
-                      width: double.infinity,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Image.memory(
+                          base64Decode(message.imageBase64!),
+                          fit: BoxFit.contain,
+                          width: double.infinity,
+                        ),
+                        // Yükleme sürerken hafif karartma + spinner
+                        if (isSending) ...[
+                          Positioned.fill(
+                            child: Container(
+                              color: Colors.black.withOpacity(0.3),
+                            ),
+                          ),
+                          const SizedBox(
+                            width: 26,
+                            height: 26,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                   if (message.text.isNotEmpty) const SizedBox(height: 8),
@@ -79,6 +102,19 @@ class UserMessageWidget extends StatelessWidget {
                       color: context.textPrimary,
                     ),
                   ),
+
+                // Sunucuya yükleme etiketi
+                if (isSending) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Yükleniyor...',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontStyle: FontStyle.italic,
+                      color: context.textMuted,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
