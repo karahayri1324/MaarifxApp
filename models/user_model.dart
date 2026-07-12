@@ -44,8 +44,8 @@ class UserModel {
     if (classLevel == '9') return '9. Sınıf';
     if (classLevel == '10') return '10. Sınıf';
     if (classLevel == '11') return '11. Sınıf';
-    if (classLevel == 'TYT') return 'TYT';
-    if (classLevel == 'AYT') return 'AYT';
+    // Birleşik seçenek + geriye uyum: eski 'TYT'/'AYT' hesapları da "TYT/AYT" gösterir.
+    if (classLevel == 'TYT/AYT' || classLevel == 'TYT' || classLevel == 'AYT') return 'TYT/AYT';
     return '-';
   }
 

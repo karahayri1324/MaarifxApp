@@ -674,8 +674,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ─────────────────────────────────────────────────────
 
   Widget _classDropdown(BuildContext context, UserModel user) {
+    // Eski 'TYT'/'AYT' hesapları → 'TYT/AYT'e normalize et (aksi halde value item'la
+    // eşleşmez, DropdownButton assert atar). 7/11 gibi kaldırılan değerler → null (hint).
+    const validLevels = ['8', '9', '10', 'TYT/AYT'];
+    String? cl = user.classLevel;
+    if (cl == 'TYT' || cl == 'AYT') cl = 'TYT/AYT';
+    if (cl != null && !validLevels.contains(cl)) cl = null;
     return DropdownButton<String>(
-      value: user.classLevel,
+      value: cl,
       underline: const SizedBox(),
       isDense: true,
       style: TextStyle(fontSize: 14, color: context.textSecondary),
@@ -685,8 +691,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         DropdownMenuItem(value: '8', child: Text('8. Sınıf')),
         DropdownMenuItem(value: '9', child: Text('9. Sınıf')),
         DropdownMenuItem(value: '10', child: Text('10. Sınıf')),
-        DropdownMenuItem(value: 'TYT', child: Text('TYT')),
-        DropdownMenuItem(value: 'AYT', child: Text('AYT')),
+        DropdownMenuItem(value: 'TYT/AYT', child: Text('TYT/AYT')),
       ],
       onChanged: _updateClassLevel,
       hint: Text('Seç', style: TextStyle(color: context.textMuted)),

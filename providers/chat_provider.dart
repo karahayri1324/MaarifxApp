@@ -327,7 +327,10 @@ class ChatProvider extends ChangeNotifier {
       }
       messages[msgIndex].status = MessageStatus.complete;
       // hasSessionData yalnızca stream sırasında session verisi (command/audio/renderedStep) geldiyse true olur
-      // Burada tekrar true yapmıyoruz — metin cevaplarında yanlışlıkla "Çözümü İzle" butonu çıkmasın
+      // Burada tekrar true yapmıyoruz — metin cevaplarında yanlışlıkla "Çözümü İzle" butonu çıkmasın.
+      // ÇİZİMLİ cevapta buton, backend'in request_complete'ten HEMEN ÖNCE yolladığı stream_data+
+      // renderedStep 'session-signal'i ile set edilir (server.js sendCompleteToUser) → Flutter'a
+      // dokunmadan garanti. Backend hasDrawing bayrağını da payload'a koyar (ileride kullanılabilir).
       messages[msgIndex].sessionDuration = data['duration'] as int?;
     }
 

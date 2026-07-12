@@ -188,7 +188,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (raw is List && raw.length == 4) {
       region = raw.map((e) => (e as num).toInt()).toList();
     }
-    if (region == null) return;
+    // region null OLABİLİR (çizmeden düz takip sorusu) — eskiden burada return edilip
+    // NOT DAHİL her şey sessizce düşüyordu ("gönderdim, hiçbir şey olmadı" bug'ı).
+    // Not boşsa gönderilecek bir şey yok; not varsa region'sız da geçerli takip sorusudur.
+    if (note.trim().isEmpty && region == null) return;
     if (mounted) {
       Navigator.of(context).pop(AnnotationResult(text: note, markedRegion: region));
     }

@@ -285,8 +285,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       DropdownMenuItem(value: '8', child: Text('8. Sınıf')),
                       DropdownMenuItem(value: '9', child: Text('9. Sınıf')),
                       DropdownMenuItem(value: '10', child: Text('10. Sınıf')),
-                      DropdownMenuItem(value: 'TYT', child: Text('TYT')),
-                      DropdownMenuItem(value: 'AYT', child: Text('AYT')),
+                      DropdownMenuItem(value: 'TYT/AYT', child: Text('TYT/AYT')),
                     ],
                     onChanged: (value) {
                       setState(() => _selectedClassLevel = value);
