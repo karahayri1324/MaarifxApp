@@ -18,6 +18,7 @@ import '../auth/login_screen.dart';
 import '../auth/register_screen.dart';
 import '../player/player_screen.dart';
 import '../settings/privacy_policy_screen.dart';
+import '../../widgets/common/server_notice_dialog.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -31,8 +32,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   bool _guestInitializing = false;
   bool _serverCheckInFlight = false;
+  bool _noticeInFlight = false;   // bildirim diyaloğu aynı anda iki kez açılmasın
   StreamSubscription? _shareSubscription;
   File? _sharedImage;
+
+  // En yeni mesaj (reverse list'in anchor'ı, index 0) stream sırasında büyür.
+  // Kullanıcı offset 0'da değilse (yukarı kaydırmışsa) bu büyüme, altındaki
+  // içeriği pixel bazında kaydırıyor gibi görünüyordu ("scroll jump" bugu).
+  // Bu key ile anchor item'ın boyunu her frame ölçüp farkı jumpTo ile telafi ediyoruz.
+  final GlobalKey _latestItemKey = GlobalKey();
+  double? _latestItemHeight;
+  String? _latestItemId;
 
   @override
   void initState() {
@@ -152,6 +162,37 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
   }
 
+  // En yeni mesajın (index 0, reverse-list anchor) yüksekliği stream token'larıyla
+  // sürekli değişir. Kullanıcı pixels==0'da (en altta) değilse bu boy değişimi
+  // ScrollPosition.pixels'i etkilemeden altındaki görünümü kaydırır — kullanıcı
+  // "sürekli zıplıyor" olarak algılar. Her frame sonrası boy farkını ölçüp
+  // aynı miktarda jumpTo ile telafi ediyoruz, kullanıcının okuduğu konum sabit kalır.
+  void _compensateScroll() {
+    if (!mounted || !_scrollController.hasClients) return;
+    final messages = context.read<ChatProvider>().messages;
+    if (messages.isEmpty) return;
+    final latestId = messages.last.id;
+    final renderObject = _latestItemKey.currentContext?.findRenderObject();
+    final newHeight =
+        renderObject is RenderBox && renderObject.hasSize ? renderObject.size.height : null;
+
+    if (_latestItemId != latestId) {
+      // Yeni bir mesaj eklendi: farklı item'lar arası boy farkı anlamsız, sadece
+      // yeni taban yüksekliği kaydedilir, bu frame'de telafi uygulanmaz.
+      _latestItemId = latestId;
+      _latestItemHeight = newHeight;
+      return;
+    }
+
+    if (newHeight != null && _latestItemHeight != null) {
+      final delta = newHeight - _latestItemHeight!;
+      if (delta.abs() > 0.5 && _scrollController.position.pixels > 4) {
+        _scrollController.jumpTo(_scrollController.position.pixels + delta);
+      }
+    }
+    _latestItemHeight = newHeight;
+  }
+
   /// AI veri kullanim onay dialogu
   Future<bool> _checkAiConsent() async {
     final prefs = await SharedPreferences.getInstance();
@@ -260,7 +301,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       return;
     }
 
-    final isDirectChat = !chatProvider.drawOnImage;
+    // EFEKTİF mod: sohbet kilitliyse sohbetinki — oynatıcıya düşme kararı da
+    // gerçekte gönderilen modla aynı olmalı (kilitli sohbette global toggle yanıltır).
+    final isDirectChat = !chatProvider.effectiveDrawOnImage;
 
     final result = await chatProvider.sendMessage(
       imageFile: image,
@@ -304,6 +347,36 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (annotationResult != null && mounted) {
       _handleAnnotationResult(annotationResult);
     }
+  }
+
+  /// ```maarifx-quiz``` kartından gelen cevap: normal bir metin turu olarak
+  /// gönderilir (QUIZ_ANSWER.md — cevap tool değil, USER mesajıdır).
+  /// Çizimsiz mod olduğu için PlayerScreen'e gidilmez, sohbette kalınır.
+  Future<void> _handleQuizAnswer(String fence) async {
+    final chatProvider = context.read<ChatProvider>();
+    final authProvider = context.read<AuthProvider>();
+
+    if (!await chatProvider.checkInternetConnection()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('İnternet bağlantısı yok. Cevabın gönderilemedi.'),
+          backgroundColor: AppTheme.danger,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+      return;
+    }
+    if (!chatProvider.serverReachable) {
+      if (mounted) ServerErrorDialog.show(context);
+      return;
+    }
+
+    await chatProvider.sendMessage(
+      prompt: fence,
+      classLevel: authProvider.user?.classLevel,
+      forceDirectChat: true,   // çizim açık olsa bile oynatıcıya düşme, sohbette kal
+    );
+    _scrollToBottom(force: true);
   }
 
   Future<void> _handleAnnotationResult(AnnotationResult annotation) async {
@@ -379,6 +452,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         builder: (context, chatProvider, child) {
           // Show server error dialog if needed
           // In-flight guard: her rebuild yeni bir kontrol yığmasın
+          // SUNUCU BİLDİRİMİ — MODAL YOLU. Bildirimler VARSAYILAN olarak sohbete
+          // balon düşer (bkz. ServerNoticeBody); buraya yalnız sunucu açıkça
+          // display:"dialog" dediğinde bir şey gelir. Ekran içeriği YORUMLAMAZ.
+          if (chatProvider.pendingNotice != null && !_noticeInFlight) {
+            _noticeInFlight = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) async {
+              final n = chatProvider.consumeNotice();
+              if (n != null && mounted) await showServerNotice(context, n);
+              _noticeInFlight = false;
+            });
+          }
+
           if (!chatProvider.serverReachable &&
               !chatProvider.isProcessing &&
               !_serverCheckInFlight) {
@@ -699,48 +784,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 height: 1.6,
               ),
             ),
-            const SizedBox(height: 36),
-            Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    AppTheme.primary.withOpacity(0.1),
-                    AppTheme.primaryLight.withOpacity(0.1),
-                  ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                border: Border.all(
-                  color: AppTheme.primary.withOpacity(0.2),
-                ),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: AppTheme.primary.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(Icons.lightbulb_outline,
-                        color: AppTheme.primary, size: 22),
-                  ),
-                  const SizedBox(width: 14),
-                  const Expanded(
-                    child: Text(
-                      'İpucu: Aşağıdaki + butonuna tıklayarak soru görseli yükleyebilirsin.',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: AppTheme.primary,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
           ],
         ),
       ),
@@ -749,7 +792,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   Widget _buildMessageList(ChatProvider chatProvider) {
     // Reverse ListView: en yeni mesaj viewport dibinde anchor'lanır.
-    // Streaming sırasında bubble yukarı doğru büyür, scroll gerekmez — jitter yok.
+    // Streaming sırasında bubble yukarı doğru büyür; kullanıcı en altta değilse
+    // bu büyüme _compensateScroll ile telafi edilir (bkz. yukarısı).
+    WidgetsBinding.instance.addPostFrameCallback((_) => _compensateScroll());
     return ListView.builder(
       controller: _scrollController,
       reverse: true,
@@ -759,12 +804,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         final message =
             chatProvider.messages[chatProvider.messages.length - 1 - index];
 
-        return Padding(
+        final bubble = Padding(
           padding: const EdgeInsets.only(bottom: 16),
           child: message.type == MessageType.user
               ? UserMessageWidget(message: message)
               : AIMessageWidget(
                   message: message,
+                  onQuizAnswer: _handleQuizAnswer,
                   onStepChange: (step) {
                     chatProvider.navigateToStep(message.id, step);
                   },
@@ -816,6 +862,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   },
                 ),
         );
+        return index == 0 ? KeyedSubtree(key: _latestItemKey, child: bubble) : bubble;
       },
     );
   }

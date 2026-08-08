@@ -25,6 +25,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _passwordSuccess = false;
 
   @override
+  void initState() {
+    super.initState();
+    // Uzak ayarlar: samimiyet4 bayrağı + sunucudaki tanıtım metni.
+    // Ekran bunları BEKLEMEDEN açılır; geldiklerinde kendini tazeler.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await context.read<ChatProvider>().refreshRemoteSettings();
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
   void dispose() {
     _currentPasswordController.dispose();
     _newPasswordController.dispose();
@@ -267,6 +278,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _sectionLabel(context, 'Hesap'),
               _cardGroup(context, [
                 if (user != null) ...[
+                  // Kullanıcı adı — öğretmenin hitap ettiği ad
+                  _tileTap(
+                    context,
+                    icon: Icons.badge_outlined,
+                    title: 'Kullanıcı Adı',
+                    subtitle: (user.displayName ?? '').trim().isEmpty
+                        ? 'Öğretmenin sana nasıl hitap etsin?'
+                        : user.displayName!,
+                    trailing: Icon(Icons.chevron_right_rounded,
+                        color: context.textMuted, size: 22),
+                    onTap: () => _editDisplayName(context),
+                  ),
+                  _divider(context),
                   if (user.schoolName != null && user.schoolName!.isNotEmpty) ...[
                     _tile(
                       context,
@@ -699,22 +723,94 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _samimiyetDropdown(BuildContext context, ChatProvider chatProvider) {
+    // "Çok samimi" UZAKTAN kapatılabilir (/api/app-config → samimiyet4Enabled;
+    // okul veya kullanıcı bazında). Kapalıysa seçenek LİSTEDE HİÇ GÖRÜNMEZ.
+    // Sunucu ayrıca istek anında da reddediyor — bu yalnız arayüz katmanı.
+    final dortAcik = chatProvider.samimiyet4Enabled;
+    final secili = chatProvider.samimiyet.clamp(1, dortAcik ? 4 : 3);
     return DropdownButton<int>(
-      value: chatProvider.samimiyet.clamp(1, 4),
+      value: secili,
       underline: const SizedBox(),
       isDense: true,
       style: TextStyle(fontSize: 14, color: context.textSecondary),
       icon: Icon(Icons.unfold_more_rounded, size: 18, color: context.textMuted),
-      items: const [
-        DropdownMenuItem(value: 1, child: Text('Resmî')),
-        DropdownMenuItem(value: 2, child: Text('Dengeli')),
-        DropdownMenuItem(value: 3, child: Text('Samimi')),
-        DropdownMenuItem(value: 4, child: Text('Çok samimi')),
+      items: [
+        const DropdownMenuItem(value: 1, child: Text('Resmî')),
+        const DropdownMenuItem(value: 2, child: Text('Dengeli')),
+        const DropdownMenuItem(value: 3, child: Text('Samimi')),
+        if (dortAcik) const DropdownMenuItem(value: 4, child: Text('Çok samimi')),
       ],
       onChanged: (v) {
         if (v != null) chatProvider.setSamimiyet(v);
       },
     );
+  }
+
+  // ─────────────────────────────────────────────────────
+  // Kullanıcı adı
+  // ─────────────────────────────────────────────────────
+  Future<void> _editDisplayName(BuildContext context) async {
+    final auth = context.read<AuthProvider>();
+    final controller = TextEditingController(text: auth.user?.displayName ?? '');
+    final sonuc = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Kullanıcı Adı'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 40,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(
+            hintText: 'Adın',
+            helperText: 'Öğretmenin sana bu adla hitap eder',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Vazgeç'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text),
+            child: const Text('Kaydet'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (sonuc == null || !mounted) return;
+
+    final ad = sonuc.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (ad.length < 2 || ad.length > 40) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Ad 2-40 karakter olmalı'),
+          backgroundColor: AppTheme.danger,
+        ),
+      );
+      return;
+    }
+
+    final basarili = await context.read<ChatProvider>().vdsService
+        .updateProfile(displayName: ad);
+    if (!mounted) return;
+    if (basarili) {
+      if (auth.user != null) auth.updateUser(auth.user!.copyWith(displayName: ad));
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Kullanıcı adın güncellendi')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Kullanıcı adı güncellenemedi. Tekrar deneyin.'),
+          backgroundColor: AppTheme.danger,
+        ),
+      );
+    }
   }
 
   Future<void> _editIntro(BuildContext context, ChatProvider chatProvider) async {

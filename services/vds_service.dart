@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config/app_config.dart';
+import '../models/server_notice.dart';
 
 // ─── VDS WebSocket Mesaj Tipleri ───
 enum VdsMessageType {
@@ -18,6 +19,7 @@ enum VdsMessageType {
   requestProcessing,
   requestComplete,
   requestError,
+  notice,          // AÇIK UÇLU sunucu bildirimi (kota/ban/duyuru…) — sebep app'te TANIMLI DEĞİL
   ping,
   pong,
   unknown,
@@ -219,6 +221,19 @@ class RateLimitException implements Exception {
   });
 }
 
+// ─── Sohbet Modu Kilidi (HTTP 409) ───
+/// Sohbetin modu (çizimli/çizimsiz) ilk istekte kilitlenir; karşıt modda
+/// gönderim sunucu tarafından reddedilir.
+class ConversationModeLockedException implements Exception {
+  final String message;
+  final bool conversationMode; // true = sohbet çizimli, false = çizimsiz
+
+  ConversationModeLockedException({
+    required this.message,
+    required this.conversationMode,
+  });
+}
+
 // ─── VDS Service ───
 class VdsService {
   String? _authToken;
@@ -342,6 +357,9 @@ class VdsService {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         return SendMessageResult.fromJson(data);
       }
+      // Bildirim varsa O kazanır (sunucunun yazdığı serbest metin); yoksa
+      // aşağıdaki eski rate-limit yolu çalışır — geriye dönük uyumlu.
+      _throwIfNotice(response);
       if (response.statusCode == 429) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         final rl = data['rateLimit'] as Map<String, dynamic>? ?? {};
@@ -352,11 +370,43 @@ class VdsService {
           type: rl['type'] as String? ?? 'user',
         );
       }
+      _throwIfConvModeLocked(response);
       return null;
     } catch (e) {
+      // KRİTİK: tipli istisnalar buradan geçmeli, yoksa null'a düşüp generic
+      // "Mesaj gönderilemedi" hatasına dönüşürler.
+      if (e is ServerNoticeException) rethrow;
       if (e is RateLimitException) rethrow;
+      if (e is ConversationModeLockedException) rethrow;
       return null;
     }
+  }
+
+  /// AÇIK UÇLU BİLDİRİM KAPISI. Sunucu HERHANGİ bir durum kodunda govdeye
+  /// `notice` koyduysa onu fırlat — uygulama sebebi bilmez, mesajı gösterir.
+  /// Yeni senaryolar (okul banı, bakım, duyuru…) app güncellemesi gerektirmez.
+  void _throwIfNotice(http.Response response) {
+    if (response.statusCode >= 200 && response.statusCode < 300) return;
+    ServerNotice? notice;
+    try {
+      notice = ServerNotice.fromBody(jsonDecode(response.body));
+    } catch (_) {
+      notice = null;   // govde JSON değil → çağıran eski yoluna devam etsin
+    }
+    if (notice != null) {
+      throw ServerNoticeException(notice, statusCode: response.statusCode);
+    }
+  }
+
+  /// 409 CONV_MODE_LOCKED → tipli istisna (sohbet modu kilidi).
+  void _throwIfConvModeLocked(http.Response response) {
+    if (response.statusCode != 409) return;
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (data['code'] != 'CONV_MODE_LOCKED') return;
+    throw ConversationModeLockedException(
+      message: data['error'] as String? ?? 'Bu sohbetin modu değiştirilemez.',
+      conversationMode: data['conversationMode'] == true,
+    );
   }
 
   /// Sohbetleri listele (pagination destekli)
@@ -389,8 +439,13 @@ class VdsService {
     }
   }
 
-  /// Sohbet mesajlarını getir
-  Future<List<VdsMessageData>> getConversationMessages(String conversationId) async {
+  /// Sohbet mesajlarını getir.
+  /// [mode]: sohbetin kalıcı modu (çizimli/çizimsiz) — null = kilitsiz
+  /// (kayıt yok, legacy satır, ya da alanı henüz göndermeyen eski sunucu).
+  /// Bu alan SUNUCUDAN gelir; per-mesaj draw_on_image'dan türetilmemeli
+  /// (hint-devam turları gizleniyor, quiz cevapları çizimli sohbette 0 taşıyor).
+  Future<({List<VdsMessageData> messages, bool? mode})> getConversationMessages(
+      String conversationId) async {
     try {
       final response = await http.get(
         Uri.parse('$_baseUrl${AppConfig.conversationMessagesEndpoint(conversationId)}'),
@@ -400,13 +455,16 @@ class VdsService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         final messages = data['messages'] as List<dynamic>;
-        return messages
-            .map((m) => VdsMessageData.fromJson(m as Map<String, dynamic>))
-            .toList();
+        return (
+          messages: messages
+              .map((m) => VdsMessageData.fromJson(m as Map<String, dynamic>))
+              .toList(),
+          mode: data['conversationMode'] as bool?,
+        );
       }
-      return [];
+      return (messages: <VdsMessageData>[], mode: null);
     } catch (e) {
-      return [];
+      return (messages: <VdsMessageData>[], mode: null);
     }
   }
 
@@ -494,17 +552,57 @@ class VdsService {
   }
 
   /// Profil güncelle (sınıf seviyesi)
-  Future<bool> updateProfile({String? classLevel}) async {
+  /// Profil güncelle. Yalnız VERİLEN alanlar gönderilir — biri güncellenirken
+  /// diğerleri yanlışlıkla null'lanmasın.
+  Future<bool> updateProfile({String? classLevel, String? displayName, String? studentIntro}) async {
     try {
+      final govde = <String, dynamic>{};
+      if (classLevel != null) govde['classLevel'] = classLevel;
+      if (displayName != null) govde['displayName'] = displayName;
+      if (studentIntro != null) govde['studentIntro'] = studentIntro;
+      if (govde.isEmpty) return true;
+
       final response = await http.put(
         Uri.parse('$_baseUrl${AppConfig.userProfileEndpoint}'),
         headers: _headers,
-        body: jsonEncode({'classLevel': classLevel}),
+        body: jsonEncode(govde),
       ).timeout(AppConfig.connectionTimeout);
 
       return response.statusCode == 200;
     } catch (e) {
       return false;
+    }
+  }
+
+  /// Profil oku (sınıf, ad, tanıtım metni). Tanıtım SUNUCUDA saklanır; cihaz
+  /// değiştiren öğrenci ayarlar ekranını boş bulmasın diye buradan çekilir.
+  Future<Map<String, dynamic>?> getProfile() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$_baseUrl${AppConfig.userProfileEndpoint}'),
+        headers: _headers,
+      ).timeout(AppConfig.connectionTimeout);
+      if (response.statusCode != 200) return null;
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Sunucu tarafı özellik bayrakları (uzaktan aç/kapa).
+  /// Şu an: samimiyet4Enabled (okul/kullanıcı bazında "Çok samimi" kilidi),
+  /// model.maxEnabled + MAX kotası. Okunamazsa null → çağıran güvenli
+  /// varsayılanında kalır (özelliği yok saymaz, gizlemez).
+  Future<Map<String, dynamic>?> getAppConfig() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$_baseUrl/api/app-config'),
+        headers: _headers,
+      ).timeout(AppConfig.connectionTimeout);
+      if (response.statusCode != 200) return null;
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (e) {
+      return null;
     }
   }
 
@@ -600,6 +698,9 @@ class VdsService {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         return SendMessageResult.fromJson(data);
       }
+      // Bildirim varsa O kazanır (sunucunun yazdığı serbest metin); yoksa
+      // aşağıdaki eski rate-limit yolu çalışır — geriye dönük uyumlu.
+      _throwIfNotice(response);
       if (response.statusCode == 429) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         final rl = data['rateLimit'] as Map<String, dynamic>? ?? {};
@@ -610,9 +711,12 @@ class VdsService {
           type: rl['type'] as String? ?? 'guest',
         );
       }
+      _throwIfConvModeLocked(response);
       return null;
     } catch (e) {
+      if (e is ServerNoticeException) rethrow;
       if (e is RateLimitException) rethrow;
+      if (e is ConversationModeLockedException) rethrow;
       return null;
     }
   }
@@ -721,6 +825,8 @@ class VdsService {
         return VdsMessageType.requestComplete;
       case 'request_error':
         return VdsMessageType.requestError;
+      case 'notice':
+        return VdsMessageType.notice;
       case 'ping':
         return VdsMessageType.ping;
       case 'pong':

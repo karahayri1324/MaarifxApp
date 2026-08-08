@@ -4,7 +4,9 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/chat_message.dart';
+import '../models/quiz_block.dart';
 import '../services/vds_service.dart';
+import '../models/server_notice.dart';
 
 class ChatProvider extends ChangeNotifier {
   final VdsService _vdsService;
@@ -29,6 +31,52 @@ class ChatProvider extends ChangeNotifier {
 
   // Conversation
   String? _currentConversationId;
+  // SOHBET MODU KİLİDİ: sohbet ilk istekte çizimli/çizimsiz olarak kilitlenir.
+  // null = kilitsiz (yeni sohbet ya da legacy kayıt). Kilitliyken efektif mod
+  // sohbetinkidir; kullanıcının global tercihi (_drawOnImage/SharedPreferences)
+  // DEĞİŞMEZ, yeni sohbette geri gelir.
+  bool? _conversationMode;
+
+  // AÇIK UÇLU SUNUCU BİLDİRİMİ: UI'ın bir kez gösterip tüketeceği kuyruk.
+  // Provider içeriğe BAKMAZ; taşımaktan başka bir şey yapmaz.
+  // ── UZAKTAN ÖZELLİK BAYRAKLARI (/api/app-config) ────────────────────
+  // Sunucu okul/kullanıcı bazında kapatabilir. Okunamazsa AÇIK kalır: bir ağ
+  // hatası yüzünden kullanıcının mevcut ayarını elinden almak, kapalı olması
+  // gerekeni bir tur açık bırakmaktan daha kötü (sunucu zaten reddediyor).
+  bool _samimiyet4Enabled = true;
+  bool get samimiyet4Enabled => _samimiyet4Enabled;
+
+  ServerNotice? _pendingNotice;
+  ServerNotice? get pendingNotice => _pendingNotice;
+  ServerNotice? consumeNotice() {
+    final n = _pendingNotice;
+    _pendingNotice = null;
+    return n;
+  }
+
+  /// Bildirimi SOHBETE, AI cevabı gibi bir balon olarak ekler.
+  /// Modal yerine bunun tercih edilmesi bilinçli: kullanıcı yazdığı mesajı ve
+  /// bağlamı kaybetmez, bildirim geçmişte kalır (büyük AI ürünlerinin kota
+  /// mesajlarıyla aynı davranış).
+  void _addNoticeMessage(ServerNotice n) {
+    messages.add(ChatMessage(
+      id: 'notice_${DateTime.now().microsecondsSinceEpoch}',
+      type: MessageType.ai,
+      notice: n,
+      status: MessageStatus.complete,
+    ));
+  }
+
+  /// Bildirimi sunucunun istediği yere yönlendirir (varsayılan: sohbet).
+  void pushNotice(ServerNotice n) {
+    if (n.display == NoticeDisplay.dialog) {
+      _pendingNotice = n;      // ekranı kesen modal — sunucu açıkça istediyse
+    } else {
+      _addNoticeMessage(n);
+    }
+    notifyListeners();
+  }
+
   String? _userId;
   String? _displayName;
   bool _isGuest = false;
@@ -54,6 +102,10 @@ class ChatProvider extends ChangeNotifier {
   bool get serverReachable => _serverReachable;
   bool get hasInternet => _hasInternet;
   String? get currentConversationId => _currentConversationId;
+  bool? get conversationMode => _conversationMode;
+  bool get isModeLocked => _conversationMode != null;
+  /// İsteklerin ve UI'ın okuması gereken mod: sohbet kilitliyse SOHBETİNKİ.
+  bool get effectiveDrawOnImage => _conversationMode ?? _drawOnImage;
   VdsService get vdsService => _vdsService;
 
   ChatProvider({
@@ -128,10 +180,37 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setStudentIntro(String value) async {
+  /// Tanıtım metni. Yerel önbellek + SUNUCU (tek doğruluk kaynağı): cihaz
+  /// değiştiren öğrenci ayarlar ekranını boş bulmasın.
+  Future<void> setStudentIntro(String value, {bool sunucuyaYaz = true}) async {
     _studentIntro = value.trim();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('studentIntro', _studentIntro);
+    notifyListeners();
+    if (sunucuyaYaz && !_isGuest) {
+      await _vdsService.updateProfile(studentIntro: _studentIntro);
+    }
+  }
+
+  /// Sunucudan profil + bayrakları çek (ayarlar ekranı açılışında).
+  /// Sunucudaki tanıtım metni yereli EZER — orası kaynak.
+  Future<void> refreshRemoteSettings() async {
+    if (_isGuest) return;
+    final cfg = await _vdsService.getAppConfig();
+    if (cfg != null && cfg['samimiyet4Enabled'] is bool) {
+      _samimiyet4Enabled = cfg['samimiyet4Enabled'] as bool;
+      // Bayrak kapandıysa seçili değer geçersiz kaldı → aşağı çek, kaydet.
+      if (!_samimiyet4Enabled && _samimiyet >= 4) {
+        await setSamimiyet(3);
+      }
+    }
+    final prof = await _vdsService.getProfile();
+    if (prof != null && prof['studentIntro'] is String) {
+      final uzak = (prof['studentIntro'] as String).trim();
+      if (uzak != _studentIntro) {
+        await setStudentIntro(uzak, sunucuyaYaz: false);
+      }
+    }
     notifyListeners();
   }
 
@@ -206,6 +285,12 @@ class ChatProvider extends ChangeNotifier {
         break;
       case VdsMessageType.requestError:
         _handleRequestError(msg.data);
+        break;
+      case VdsMessageType.notice:
+        // Anlık, isteğe bağlı OLMAYAN bildirim (ör. okul erişimi kapatıldı).
+        // İçerik yorumlanmaz; olduğu gibi UI'a taşınır.
+        final n = ServerNotice.fromBody(msg.data);
+        if (n != null) pushNotice(n);
         break;
       default:
         break;
@@ -433,8 +518,29 @@ class ChatProvider extends ChangeNotifier {
     List<int>? markedRegion,   // işaretli bölge [x1,y1,x2,y2] 0-1000 (takip turu)
     String? hintRef,           // Hint yanıtı ref (takip turu)
     String? studentQuestion,   // işaretli bölge takip notu → <ogrenci_sorusu>
+    bool? forceDirectChat,     // quiz cevabı: çizim açık olsa bile METİN turu (sohbette kal)
   }) async {
-    // Coklu request: bloklama yok
+    // MOD KİLİDİ: sohbet başladıysa efektif mod SOHBETİNKİdir (global toggle değil).
+    // quiz cevabı (forceDirectChat) istisna: backend bunu muaf tutuyor.
+    final bool startingNew = _currentConversationId == null;
+    // GÖRSELSİZ YENİ SOHBET: çizim toggle'ı açık ama fotoğraf yoksa istek otomatik
+    // ÇİZİMSİZ gider. Çizim, soru görselinin ÜZERİNE yapılır — görsel yokken çizim
+    // modu zaten imkânsız. Eskiden gönder butonu kilitleniyordu; artık gönderilebilir
+    // ve mod sessizce metne düşer (sohbet de o modda kilitlenir, tutarlı kalır).
+    final bool gorselsizDusus =
+        startingNew && forceDirectChat != true && effectiveDrawOnImage && imageFile == null;
+    final effDraw = (forceDirectChat == true || gorselsizDusus) ? false : effectiveDrawOnImage;
+    // Coklu request: bloklama yok. Bu yüzden ilk gönderim uçuştayken ikincisi de
+    // AYNI modu kullansın diye modu şimdiden kilitliyoruz; başarısızlıkta geri alınır.
+    if (startingNew && _conversationMode == null && forceDirectChat != true) {
+      _conversationMode = effDraw;
+    }
+    // Sohbet hiç açılmadıysa iyimser kilidi geri al (hata yollarından çağrılır).
+    void revertOptimisticLock() {
+      if (startingNew && _currentConversationId == null && _activeRequests.isEmpty) {
+        _conversationMode = null;
+      }
+    }
 
     String? imageBase64ForDisplay;
     if (imageFile != null) {
@@ -461,10 +567,12 @@ class ChatProvider extends ChangeNotifier {
     final hasNet = await checkInternetConnection();
     if (!hasNet) {
       _serverReachable = false;
+      revertOptimisticLock();
       removeTempMessage();
       _addErrorMessage(
           'İnternet bağlantısı bulunamadı. Lütfen Wi-Fi veya mobil veri bağlantınızı kontrol edip tekrar deneyin.',
-          imageFile: imageFile, prompt: prompt, classLevel: classLevel);
+          imageFile: imageFile, prompt: prompt, classLevel: classLevel,
+          forceDirectChat: forceDirectChat == true);
       notifyListeners();
       return null;
     }
@@ -472,10 +580,12 @@ class ChatProvider extends ChangeNotifier {
     final status = await _vdsService.checkStatus();
     if (status == null) {
       _serverReachable = false;
+      revertOptimisticLock();
       removeTempMessage();
       _addErrorMessage(
           'Sunucuya ulaşılamıyor. Sunucu bakım altında olabilir, lütfen birkaç dakika sonra tekrar deneyin.',
-          imageFile: imageFile, prompt: prompt, classLevel: classLevel);
+          imageFile: imageFile, prompt: prompt, classLevel: classLevel,
+          forceDirectChat: forceDirectChat == true);
       notifyListeners();
       return null;
     }
@@ -495,7 +605,7 @@ class ChatProvider extends ChangeNotifier {
           detailLevel: _detailLevel,
           classLevel: classLevel,
           studentName: _displayName,
-          drawOnImage: _drawOnImage,
+          drawOnImage: effDraw,
           enableThinking: _enableThinking,
           samimiyet: _samimiyet,
           studentIntro: _studentIntro.isNotEmpty ? _studentIntro : null,
@@ -512,7 +622,7 @@ class ChatProvider extends ChangeNotifier {
           detailLevel: _detailLevel,
           classLevel: classLevel,
           studentName: _displayName,
-          drawOnImage: _drawOnImage,
+          drawOnImage: effDraw,
           enableThinking: _enableThinking,
           samimiyet: _samimiyet,
           studentIntro: _studentIntro.isNotEmpty ? _studentIntro : null,
@@ -522,24 +632,52 @@ class ChatProvider extends ChangeNotifier {
           model: _model,
         );
       }
+    } on ServerNoticeException catch (e) {
+      // AÇIK UÇLU BİLDİRİM: sebep burada TANINMAZ. Sunucunun yazdığı metin
+      // olduğu gibi UI'a verilir → yeni senaryolar app güncellemesi istemez.
+      // Kullanıcının yazdığı mesaj SİLİNMEZ; altına bildirim balonu düşer —
+      // "AI cevap verdi" akışı korunur, kullanıcı metnini kaybetmez.
+      revertOptimisticLock();
+      // Kullanıcının balonu KALIR ama 'gönderiliyor' spinner'ında donmasın.
+      for (final m in messages) {
+        if (m.id == tempId) m.status = MessageStatus.complete;
+      }
+      pushNotice(e.notice);
+      return null;
     } on RateLimitException catch (e) {
+      revertOptimisticLock();
       removeTempMessage();
       _addErrorMessage(_getRateLimitMessage(e),
-          imageFile: imageFile, prompt: prompt, classLevel: classLevel);
+          imageFile: imageFile, prompt: prompt, classLevel: classLevel,
+          forceDirectChat: forceDirectChat == true);
+      notifyListeners();
+      return null;
+    } on ConversationModeLockedException catch (e) {
+      // Sunucunun gerçeği kazanır → yerel modu düzelt (self-heal). Retry verisi
+      // bilerek saklanıyor: düzeltilmiş modla tekrar denemek başarılı olur.
+      _conversationMode = e.conversationMode;
+      removeTempMessage();
+      _addErrorMessage(e.message,
+          imageFile: imageFile, prompt: prompt, classLevel: classLevel,
+          forceDirectChat: forceDirectChat == true);
       notifyListeners();
       return null;
     }
 
     if (result == null) {
+      revertOptimisticLock();
       removeTempMessage();
       _addErrorMessage(
           'Mesaj gönderilemedi. Bağlantınızı kontrol edip tekrar deneyin.',
-          imageFile: imageFile, prompt: prompt, classLevel: classLevel);
+          imageFile: imageFile, prompt: prompt, classLevel: classLevel,
+          forceDirectChat: forceDirectChat == true);
       notifyListeners();
       return null;
     }
 
     _currentConversationId = result.conversationId;
+    // Sohbetin modu kilitlendi (quiz turu mod belirlemez — o zaten muaf).
+    if (forceDirectChat != true) _conversationMode ??= effDraw;
     _activeRequests.add(result.requestId);
 
     // Optimistik mesajı gerçek değerlerle güncelle — yeni user mesajı EKLENMEZ
@@ -571,7 +709,7 @@ class ChatProvider extends ChangeNotifier {
       status: MessageStatus.streaming,
       requestId: result.requestId,
       conversationId: result.conversationId,
-      isDirectChat: !_drawOnImage,
+      isDirectChat: !effDraw,
     ));
 
     if (!result.processorNotified) {
@@ -585,7 +723,8 @@ class ChatProvider extends ChangeNotifier {
     return result;
   }
 
-  void _addErrorMessage(String error, {File? imageFile, String? prompt, String? classLevel}) {
+  void _addErrorMessage(String error, {File? imageFile, String? prompt, String? classLevel,
+      bool forceDirectChat = false}) {
     final errorId = DateTime.now().millisecondsSinceEpoch.toString();
     messages.add(ChatMessage(
       id: errorId,
@@ -598,6 +737,7 @@ class ChatProvider extends ChangeNotifier {
         imageFile: imageFile,
         prompt: prompt,
         classLevel: classLevel,
+        forceDirectChat: forceDirectChat,
       );
     }
   }
@@ -617,6 +757,7 @@ class ChatProvider extends ChangeNotifier {
       imageFile: data.imageFile,
       prompt: data.prompt,
       classLevel: data.classLevel,
+      forceDirectChat: data.forceDirectChat ? true : null,
     );
   }
 
@@ -647,11 +788,16 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<void> loadConversation(String conversationId) async {
-    final vdsMessages = await _vdsService.getConversationMessages(conversationId);
+    final res = await _vdsService.getConversationMessages(conversationId);
+    final vdsMessages = res.messages;
     if (vdsMessages.isEmpty) return;
 
     clearChat();
     _currentConversationId = conversationId;
+    // Sohbetin gerçek modu sunucudan → toggle bunu gösterip kilitlenir.
+    // (Aşağıdaki per-mesaj isDirectChat türetmesi AYRI bir mesele: o balon
+    //  render'ı için, legacy sezgiselleri dahil — aynen korunuyor.)
+    _conversationMode = res.mode;
 
     for (final vdsMsg in vdsMessages) {
       final type = vdsMsg.type == 'user' ? MessageType.user : MessageType.ai;
@@ -690,6 +836,15 @@ class ChatProvider extends ChangeNotifier {
         isDirectChat: isDirectChat,
         thinkingDone: true,
       ));
+
+      // Quiz kartı "cevaplandı" durumu sohbet geçmişinden geri kurulur —
+      // uygulama yeniden açılınca öğrenci aynı soruyu boş kart olarak görmesin.
+      if (type == MessageType.user && (vdsMsg.text ?? '').isNotEmpty) {
+        final qa = parseQuizAnswer(vdsMsg.text!);
+        if (qa != null && qa.quizId.isNotEmpty) {
+          QuizAnswerStore.instance.record(qa.quizId, qa.userAnswer);
+        }
+      }
     }
 
     notifyListeners();
@@ -741,6 +896,8 @@ class ChatProvider extends ChangeNotifier {
     _activeRequests.clear();
     _retryData.clear();
     _currentConversationId = null;
+    _conversationMode = null;           // mod kilidi kalkar, global tercih geri gelir
+    QuizAnswerStore.instance.clear();   // quiz "cevaplandı" durumu sohbete bağlı
     notifyListeners();
   }
 
@@ -761,6 +918,10 @@ class _RetryData {
   final File? imageFile;
   final String? prompt;
   final String? classLevel;
+  /// Quiz cevabı turu muydu? Korunmazsa çizimli bir sohbette retry, metin turu
+  /// olması gereken quiz cevabını çizim turuna çevirirdi.
+  final bool forceDirectChat;
 
-  _RetryData({this.imageFile, this.prompt, this.classLevel});
+  _RetryData({this.imageFile, this.prompt, this.classLevel,
+      this.forceDirectChat = false});
 }

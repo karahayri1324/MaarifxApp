@@ -1,3 +1,5 @@
+import 'server_notice.dart';
+
 enum MessageType { user, ai }
 
 enum MessageStatus { sending, streaming, complete, error }
@@ -29,6 +31,10 @@ class ChatMessage {
   String thinkingText;
   bool thinkingDone;
 
+  /// Sunucu bildirimi (kota/ban/duyuru). Doluysa balon AI cevabı yerine
+  /// bildirim olarak çizilir — ChatGPT'nin limit mesajı gibi sohbetin içinde.
+  final ServerNotice? notice;
+
   ChatMessage({
     required this.id,
     required this.type,
@@ -51,6 +57,7 @@ class ChatMessage {
     this.isDirectChat = false,
     this.thinkingText = '',
     this.thinkingDone = false,
+    this.notice,
   })  : stepImages = stepImages ?? [],
         stepOnlyImages = stepOnlyImages ?? [],
         timestamp = timestamp ?? DateTime.now();

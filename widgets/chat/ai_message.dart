@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
-import 'package:flutter_math_fork/flutter_math.dart';
-import 'package:markdown/markdown.dart' as md;
 import '../../config/theme.dart';
 import '../../models/chat_message.dart';
+import '../../models/quiz_block.dart';
+import '../../models/server_notice.dart';
+import '../common/server_notice_body.dart';
+import 'markdown_math.dart';
+import 'quiz_card.dart';
 
 class AIMessageWidget extends StatelessWidget {
   final ChatMessage message;
@@ -11,12 +14,16 @@ class AIMessageWidget extends StatelessWidget {
   final Function(String)? onReplay;
   final VoidCallback? onRetry;
 
+  /// ```maarifx-quiz``` kartından cevap gönderilince çağrılır (fence metniyle).
+  final Future<void> Function(String fence)? onQuizAnswer;
+
   const AIMessageWidget({
     super.key,
     required this.message,
     this.onStepChange,
     this.onReplay,
     this.onRetry,
+    this.onQuizAnswer,
   });
 
   @override
@@ -67,6 +74,13 @@ class AIMessageWidget extends StatelessWidget {
   }
 
   Widget _buildContent(BuildContext context) {
+    // SUNUCU BİLDİRİMİ: kota/ban/duyuru. Modal yerine sohbetin içinde, AI
+    // cevabı gibi görünür (ChatGPT'nin limit mesajı gibi) — kullanıcı yazdığı
+    // mesajı ve bağlamı kaybetmez, geçmişte de kalır.
+    if (message.notice != null) {
+      return ServerNoticeBody(notice: message.notice!);
+    }
+
     // Direct chat modu: canli metin streaming
     if (message.isDirectChat) {
       return _buildDirectChatContent(context);
@@ -159,18 +173,46 @@ class AIMessageWidget extends StatelessWidget {
       );
     }
 
-    // Fallback: metin goster (markdown destekli)
+    // Fallback: metin goster (markdown + maarifx-quiz kartları)
     if (message.text.isNotEmpty) {
-      return MarkdownBody(
-        data: message.text,
-        selectable: true,
-        styleSheet: _mdStyle(context),
-        extensionSet: _latexExtensionSet(),
-        builders: _latexBuilders(),
-      );
+      return _richBody(context, message.text);
     }
 
     return const SizedBox.shrink();
+  }
+
+  /// Mesaj gövdesi: markdown parçaları + ```maarifx-quiz``` kartları.
+  /// Quiz yoksa tek MarkdownBody döner — eski davranışla birebir aynı.
+  Widget _richBody(BuildContext context, String text) {
+    if (!hasQuizBlock(text)) return _md(context, text);
+    final parcalar = parseMessageSegments(text);
+    if (parcalar.isEmpty) return _md(context, text);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final p in parcalar)
+          if (p.kind == SegmentKind.quiz && p.quiz != null)
+            QuizCard(
+              key: ValueKey('quiz_${p.quiz!.id}'),
+              quiz: p.quiz!,
+              onSubmit: onQuizAnswer,
+            )
+          else
+            _md(context, p.text.trim()),
+      ],
+    );
+  }
+
+  Widget _md(BuildContext context, String data) {
+    if (data.isEmpty) return const SizedBox.shrink();
+    return MarkdownBody(
+      data: data,
+      selectable: true,
+      styleSheet: _mdStyle(context),
+      extensionSet: latexExtensionSet(),
+      builders: latexBuilders(),
+      onTapLink: (t, href, title) => openMarkdownLink(href),
+    );
   }
 
   MarkdownStyleSheet _mdStyle(BuildContext context) {
@@ -189,15 +231,38 @@ class AIMessageWidget extends StatelessWidget {
         border: Border.all(color: context.borderColor),
       ),
       codeblockPadding: const EdgeInsets.all(12),
+      h1: TextStyle(fontSize: 21, fontWeight: FontWeight.w700, color: context.textPrimary),
       h2: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: context.textPrimary),
       h3: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: context.textPrimary),
       h4: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: context.textPrimary),
+      h5: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: context.textPrimary),
+      h6: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: context.textSecondary),
+      a: TextStyle(color: AppTheme.primary, decoration: TextDecoration.underline),
+      listBullet: TextStyle(fontSize: 14, color: context.textPrimary),
+      blockquote: TextStyle(fontSize: 14, height: 1.5, color: context.textSecondary),
+      blockquoteDecoration: BoxDecoration(
+        color: context.bgTertiary,
+        borderRadius: BorderRadius.circular(6),
+        border: Border(left: BorderSide(color: AppTheme.primary, width: 3)),
+      ),
+      blockquotePadding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+      tableBorder: TableBorder.all(color: context.borderColor, width: 1),
+      tableHead: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: context.textPrimary),
+      tableBody: TextStyle(fontSize: 13, color: context.textPrimary),
+      tableCellsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      horizontalRuleDecoration: BoxDecoration(
+        border: Border(top: BorderSide(color: context.borderColor, width: 1)),
+      ),
       blockSpacing: 8,
     );
   }
 
   /// Direct chat modu: thinking + content streaming (ChatGPT tarzı)
   Widget _buildDirectChatContent(BuildContext context) {
+    if (message.notice != null) {
+      return ServerNoticeBody(notice: message.notice!);
+    }
+
     final isStreaming = message.status == MessageStatus.streaming;
     final hasThinking = message.thinkingText.isNotEmpty;
     final hasContent = message.text.isNotEmpty;
@@ -241,16 +306,10 @@ class AIMessageWidget extends StatelessWidget {
         // Thinking bölümü (açılır/kapanır)
         if (hasThinking) _ThinkingSection(message: message),
 
-        // Content bölümü (markdown destekli)
+        // Content bölümü (markdown + maarifx-quiz kartları)
         if (hasContent) ...[
           if (hasThinking) const SizedBox(height: 10),
-          MarkdownBody(
-            data: message.text,
-            selectable: true,
-            styleSheet: _mdStyle(context),
-            extensionSet: _latexExtensionSet(),
-            builders: _latexBuilders(),
-          ),
+          _richBody(context, message.text),
         ],
 
         // Streaming göstergesi (content gelmeye basladiysa)
@@ -362,99 +421,6 @@ class _ThinkingSectionState extends State<_ThinkingSection> {
           ),
         ],
       ],
-    );
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// LaTeX desteği — flutter_markdown için custom inline syntax
-// ═══════════════════════════════════════════════════════════
-// Desteklenen formatlar:
-//   • $...$         inline math
-//   • $$...$$       block math
-//   • \(...\)       inline math
-//   • \[...\]       block math
-//   • \frac{a}{b}   bare (delimiter'sız) — AI prompt'larda böyle yazıyor
-//   • \dfrac, \tfrac, \sqrt da aynı şekilde
-// Bare komutlar tek seviye iç içe parantezleri destekler ({a^{2}} OK).
-
-md.ExtensionSet _latexExtensionSet() {
-  return md.ExtensionSet(
-    md.ExtensionSet.gitHubFlavored.blockSyntaxes,
-    [
-      _LatexInlineSyntax(),
-      ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
-    ],
-  );
-}
-
-Map<String, MarkdownElementBuilder> _latexBuilders() => {
-      'latex_inline': _LatexBuilder(display: false),
-      'latex_block': _LatexBuilder(display: true),
-    };
-
-class _LatexInlineSyntax extends md.InlineSyntax {
-  _LatexInlineSyntax()
-      : super(
-          r'\$\$([\s\S]+?)\$\$'
-          r'|\\\[([\s\S]+?)\\\]'
-          r'|\$([^\$\n]+?)\$'
-          r'|\\\(([\s\S]+?)\\\)'
-          r'|(\\(?:d|t)?frac\{(?:[^{}]|\{[^{}]*\})*\}\{(?:[^{}]|\{[^{}]*\})*\})'
-          r'|(\\sqrt(?:\[[^\]]*\])?\{(?:[^{}]|\{[^{}]*\})*\})',
-        );
-
-  @override
-  bool onMatch(md.InlineParser parser, Match match) {
-    String body;
-    bool block;
-
-    if (match.group(1) != null) {
-      body = match.group(1)!;
-      block = true;
-    } else if (match.group(2) != null) {
-      body = match.group(2)!;
-      block = true;
-    } else if (match.group(3) != null) {
-      body = match.group(3)!;
-      block = false;
-    } else if (match.group(4) != null) {
-      body = match.group(4)!;
-      block = false;
-    } else if (match.group(5) != null) {
-      body = match.group(5)!;
-      block = false;
-    } else if (match.group(6) != null) {
-      body = match.group(6)!;
-      block = false;
-    } else {
-      return false;
-    }
-
-    final tag = block ? 'latex_block' : 'latex_inline';
-    parser.addNode(md.Element.text(tag, body));
-    return true;
-  }
-}
-
-class _LatexBuilder extends MarkdownElementBuilder {
-  final bool display;
-  _LatexBuilder({required this.display});
-
-  @override
-  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
-    final tex = element.textContent;
-    return Math.tex(
-      tex,
-      textStyle: preferredStyle,
-      mathStyle: display ? MathStyle.display : MathStyle.text,
-      onErrorFallback: (err) => Text(
-        tex,
-        style: (preferredStyle ?? const TextStyle()).copyWith(
-          color: Colors.redAccent,
-          fontFamily: 'monospace',
-        ),
-      ),
     );
   }
 }

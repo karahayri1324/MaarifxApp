@@ -33,14 +33,24 @@ class _ChatInputState extends State<ChatInput> {
   final _imagePicker = ImagePicker();
   File? _selectedImage;
   bool _isPreparingImage = false;
-  bool _drawOnImage = true; // build'de ChatProvider'dan senkronlanır
+  bool _drawOnImage = true; // build'de ChatProvider'dan senkronlanır (EFEKTİF mod)
+  bool _inExistingConversation = false; // build'de senkronlanır
 
-  // Çizim modu AÇIK → görsel zorunlu; KAPALI → görsel veya metin yeterli.
+  // Çizim modu AÇIK → YENİ soruda görsel zorunlu; KAPALI → görsel veya metin yeterli.
+  // Mevcut sohbette takip mesajı görselsiz de serbest (backend'in desteklediği
+  // görselsiz takip turu; web de aynısını yapıyor). Mod kilidi eski bir çizimli
+  // sohbeti açtığında kullanıcıyı düz metin yazamaz hale getirmesin.
+  // Çizim açıkken görsel ZORUNLU DEĞİL: fotoğrafsız gönderim otomatik olarak
+  // çizimsiz (metin) turuna düşer — provider'daki `gorselsizDusus`. Buton artık
+  // yalnız "hiçbir içerik yok" durumunda kapalı.
   bool get _canSend {
     if (!widget.enabled || _isPreparingImage) return false;
-    if (_drawOnImage) return _selectedImage != null;
     return _selectedImage != null || _textController.text.trim().isNotEmpty;
   }
+
+  /// Çizim açık, görsel yok → istek metin turu olarak gidecek (kullanıcıya söylenir).
+  bool get _cizimsizeDusecek =>
+      _drawOnImage && !_inExistingConversation && _selectedImage == null;
 
   @override
   void didUpdateWidget(covariant ChatInput oldWidget) {
@@ -207,8 +217,11 @@ class _ChatInputState extends State<ChatInput> {
 
   @override
   Widget build(BuildContext context) {
-    // Gönderim kuralları drawOnImage'a bağlı — provider'ı izle, state'i taşı
-    _drawOnImage = context.watch<ChatProvider>().drawOnImage;
+    // Gönderim kuralları drawOnImage'a bağlı — provider'ı izle, state'i taşı.
+    // EFEKTİF mod: sohbet kilitliyse sohbetinki, değilse kullanıcı tercihi.
+    final cp = context.watch<ChatProvider>();
+    _drawOnImage = cp.effectiveDrawOnImage;
+    _inExistingConversation = cp.currentConversationId != null;
 
     return Container(
       padding: EdgeInsets.only(
@@ -272,7 +285,7 @@ class _ChatInputState extends State<ChatInput> {
                   ),
                 ),
 
-                // Model çipi ('3.0 ⌄' / '3.0 MAX ⌄') — gönder butonunun solunda
+                // Model çipi ('3.0 ⌄' / 'MAX ⌄') — gönder butonunun solunda
                 _ModelChip(onTap: _showModelSheet),
                 const SizedBox(width: 4),
 
@@ -470,22 +483,18 @@ class _ChatInputState extends State<ChatInput> {
   }
 
   void _sendMessage() {
-    if (!_canSend) {
-      // Buton zaten disabled; klavyeden Enter ile gelen denemeyi bilgilendir
-      if (widget.enabled &&
-          !_isPreparingImage &&
-          _drawOnImage &&
-          _selectedImage == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content:
-                Text('Soru Üzerine Çizim açık — fotoğraf eklemek zorunlu'),
-            behavior: SnackBarBehavior.floating,
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-      return;
+    if (!_canSend) return;
+
+    // Çizim açıkken fotoğrafsız gönderiliyorsa sessizce mod düşüyor — kullanıcı
+    // "çizim bekliyordum" diye şaşırmasın diye bir kez bilgilendir.
+    if (_cizimsizeDusecek) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Fotoğraf yok — bu mesaj metin olarak yanıtlanacak'),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
 
     widget.onSend(_selectedImage, _textController.text.trim());
@@ -502,9 +511,13 @@ class _DrawOnImageToggle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final chatProvider = context.watch<ChatProvider>();
-    final enabled = chatProvider.drawOnImage;
+    // MOD KİLİDİ: sohbet başladıysa SOHBETİN modu gösterilir ve değiştirilemez.
+    final locked = chatProvider.isModeLocked;
+    final enabled = chatProvider.effectiveDrawOnImage;
 
-    return Padding(
+    return Opacity(
+      opacity: locked ? 0.5 : 1.0,
+      child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
@@ -523,7 +536,9 @@ class _DrawOnImageToggle extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  enabled ? 'Görsel çözüm (çizimli)' : 'Düz metin yanıt',
+                  locked
+                      ? 'Sohbet ${enabled ? "çizimli" : "çizimsiz"} başladı — bu sohbette değiştirilemez'
+                      : (enabled ? 'Görsel çözüm (çizimli)' : 'Düz metin yanıt'),
                   style: TextStyle(
                     fontSize: 12,
                     color: context.textMuted,
@@ -532,8 +547,12 @@ class _DrawOnImageToggle extends StatelessWidget {
               ],
             ),
           ),
+          if (locked) ...[
+            Icon(Icons.lock_outline_rounded, size: 16, color: context.textMuted),
+            const SizedBox(width: 8),
+          ],
           GestureDetector(
-            onTap: () => chatProvider.setDrawOnImage(!enabled),
+            onTap: locked ? null : () => chatProvider.setDrawOnImage(!enabled),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               width: 48,
@@ -564,6 +583,7 @@ class _DrawOnImageToggle extends StatelessWidget {
             ),
           ),
         ],
+      ),
       ),
     );
   }
@@ -768,7 +788,7 @@ class _PreparingImagePlaceholderState extends State<_PreparingImagePlaceholder>
 }
 
 /// Composer sağ-altındaki kompakt model çipi: '3.0 ⌄', MAX seçiliyken
-/// '3.0 MAX ⌄' (AppBar'daki MAX rozetiyle aynı gradient vurgu).
+/// 'MAX ⌄' (AppBar'daki MAX rozetiyle aynı gradient vurgu).
 /// select: yalnız model değişince rebuild (watch her token'da yeniden çizerdi)
 class _ModelChip extends StatelessWidget {
   final VoidCallback onTap;
@@ -797,7 +817,8 @@ class _ModelChip extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              isMax ? '3.0 MAX' : '3.0',
+              // MAX açıkken yalnız 'MAX' — '3.0 MAX' çipi gönder butonunu sıkıştırıyordu
+              isMax ? 'MAX' : '3.0',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: isMax ? FontWeight.w700 : FontWeight.w500,
@@ -825,7 +846,8 @@ class ModelSelector extends StatelessWidget {
   Widget build(BuildContext context) {
     final chatProvider = context.watch<ChatProvider>();
     final model = chatProvider.model;
-    final drawOn = chatProvider.drawOnImage;
+    // Kilitli-çizimsiz sohbette MAX seçilebilir GÖRÜNMESİN → efektif mod
+    final drawOn = chatProvider.effectiveDrawOnImage;
     final isGuest = chatProvider.isGuestUser;
 
     return Padding(
@@ -848,7 +870,7 @@ class ModelSelector extends StatelessWidget {
               ),
               const Spacer(),
               Text(
-                model == '3.0-max' ? '3.0 MAX' : '3.0',
+                model == '3.0-max' ? 'MAX' : '3.0',
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
