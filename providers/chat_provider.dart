@@ -132,6 +132,14 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
+  /// Kullanıcı adı ayarlardan değişince çağrılır. Bu kopya isteğe `studentName`
+  /// olarak gidiyor; güncellenmezse model, uygulama yeniden başlatılana kadar
+  /// öğrenciye ESKİ adıyla hitap etmeye devam eder.
+  void setDisplayName(String? ad) {
+    _displayName = (ad ?? '').trim().isEmpty ? null : ad!.trim();
+    notifyListeners();
+  }
+
   void _connectWebSocket() {
     _connectionSubscription?.cancel();
     _messageSubscription?.cancel();
@@ -193,7 +201,13 @@ class ChatProvider extends ChangeNotifier {
   }
 
   /// Sunucudan profil + bayrakları çek (ayarlar ekranı açılışında).
-  /// Sunucudaki tanıtım metni yereli EZER — orası kaynak.
+  ///
+  /// Tanıtım metninde sunucu kaynaktır AMA yalnız DOLU olduğunda. Sebep: bu
+  /// sürümden önce tanıtım YALNIZCA cihazda (SharedPreferences) tutuluyordu;
+  /// sunucudaki alanı hiçbir kod yazmıyordu. Koşulsuz "uzak ezer" deseydik,
+  /// güncellemeden sonra ayarları ilk açan her öğrencinin kendi yazdığı metin
+  /// boş bir sunucu değeriyle SİLİNİRDİ. Uzak boş + yerel dolu ise bu tek
+  /// seferlik göç sayılır ve yerel metin yukarı taşınır.
   Future<void> refreshRemoteSettings() async {
     if (_isGuest) return;
     final cfg = await _vdsService.getAppConfig();
@@ -207,8 +221,13 @@ class ChatProvider extends ChangeNotifier {
     final prof = await _vdsService.getProfile();
     if (prof != null && prof['studentIntro'] is String) {
       final uzak = (prof['studentIntro'] as String).trim();
-      if (uzak != _studentIntro) {
-        await setStudentIntro(uzak, sunucuyaYaz: false);
+      if (uzak.isNotEmpty) {
+        if (uzak != _studentIntro) {
+          await setStudentIntro(uzak, sunucuyaYaz: false);
+        }
+      } else if (_studentIntro.isNotEmpty) {
+        // Göç: cihazdaki metni sunucuya taşı (silme YOK).
+        await _vdsService.updateProfile(studentIntro: _studentIntro);
       }
     }
     notifyListeners();
@@ -320,7 +339,10 @@ class ChatProvider extends ChangeNotifier {
     if (!messages[msgIndex].isDirectChat) return;
 
     final token = data['token'] as String? ?? '';
-    messages[msgIndex].thinkingText += token;
+    if (token.isEmpty) return;
+
+    // Düşünme METNİ saklanmıyor — öğrenciye gösterilmiyor, tek gösterge sayaç.
+    messages[msgIndex].thinkingTokenEkle(token);
     notifyListeners();
   }
 

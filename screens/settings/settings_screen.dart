@@ -799,6 +799,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) return;
     if (basarili) {
       if (auth.user != null) auth.updateUser(auth.user!.copyWith(displayName: ad));
+      // ChatProvider kendi kopyasını tutuyor (isteğe `studentName` olarak gider)
+      // → onu da tazele, yoksa model eski adı kullanmaya devam eder.
+      context.read<ChatProvider>().setDisplayName(ad);
       setState(() {});
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Kullanıcı adın güncellendi')),

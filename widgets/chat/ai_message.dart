@@ -3,7 +3,6 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import '../../config/theme.dart';
 import '../../models/chat_message.dart';
 import '../../models/quiz_block.dart';
-import '../../models/server_notice.dart';
 import '../common/server_notice_body.dart';
 import 'markdown_math.dart';
 import 'quiz_card.dart';
@@ -264,7 +263,7 @@ class AIMessageWidget extends StatelessWidget {
     }
 
     final isStreaming = message.status == MessageStatus.streaming;
-    final hasThinking = message.thinkingText.isNotEmpty;
+    final hasThinking = message.thinkingWords > 0;
     final hasContent = message.text.isNotEmpty;
 
     // Henuz hicbir sey gelmedi
@@ -331,96 +330,65 @@ class AIMessageWidget extends StatelessWidget {
   }
 }
 
-/// Thinking bölümü — düşünme sürecini açılır/kapanır şekilde gösterir
-class _ThinkingSection extends StatefulWidget {
+/// Düşünme göstergesi — SÜRECİ GÖSTERMEZ, yalnız artan kelime sayacını basar.
+///
+/// Öğrenci modelin düşündüğünü görür ama düşüncenin içeriğini görmez. Sayaç
+/// akış boyunca hızla artar; bitince sabit bir özete dönüşür. Açılır/kapanır
+/// ham metin bölümü bilerek kaldırıldı (metin artık tutulmuyor bile).
+class _ThinkingSection extends StatelessWidget {
   final ChatMessage message;
   const _ThinkingSection({required this.message});
 
   @override
-  State<_ThinkingSection> createState() => _ThinkingSectionState();
-}
-
-class _ThinkingSectionState extends State<_ThinkingSection> {
-  bool _expanded = false;
-
-  @override
   Widget build(BuildContext context) {
-    final isStillThinking = !widget.message.thinkingDone &&
-        widget.message.status == MessageStatus.streaming;
+    final isStillThinking =
+        !message.thinkingDone && message.status == MessageStatus.streaming;
+    final n = message.thinkingWords;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Header: tıklanabilir açılır/kapanır
-        GestureDetector(
-          onTap: () => setState(() => _expanded = !_expanded),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: AppTheme.primary.withOpacity(0.08),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (isStillThinking)
-                  const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1.5,
-                      valueColor:
-                          AlwaysStoppedAnimation<Color>(AppTheme.primary),
-                    ),
-                  )
-                else
-                  const Icon(Icons.psychology_rounded,
-                      size: 16, color: AppTheme.primary),
-                const SizedBox(width: 6),
-                Text(
-                  isStillThinking ? 'Düşünüyor...' : 'Düşünce süreci',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: AppTheme.primary,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Icon(
-                  _expanded
-                      ? Icons.keyboard_arrow_up
-                      : Icons.keyboard_arrow_down,
-                  size: 18,
-                  color: AppTheme.primary,
-                ),
-              ],
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppTheme.primary.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isStillThinking)
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primary),
+              ),
+            )
+          else
+            const Icon(Icons.psychology_rounded,
+                size: 16, color: AppTheme.primary),
+          const SizedBox(width: 6),
+          Text(
+            isStillThinking ? 'Düşünüyor' : 'Düşündü',
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: AppTheme.primary,
             ),
           ),
-        ),
-
-        // Expanded thinking content
-        if (_expanded) ...[
-          const SizedBox(height: 8),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: context.bgTertiary,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: context.borderColor),
-            ),
-            child: SelectableText(
-              widget.message.thinkingText,
-              style: TextStyle(
-                fontSize: 12,
-                color: context.textSecondary,
-                fontStyle: FontStyle.italic,
-                height: 1.5,
-              ),
+          const SizedBox(width: 6),
+          // Sayı hızla değiştiği için sabit genişlikli rakam ŞART; yoksa
+          // 9→10→100 geçişlerinde satır sürekli genişleyip zıplar.
+          Text(
+            '$n kelime',
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: AppTheme.primary,
+              fontFeatures: [FontFeature.tabularFigures()],
             ),
           ),
         ],
-      ],
+      ),
     );
   }
 }
