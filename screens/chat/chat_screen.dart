@@ -19,6 +19,7 @@ import '../auth/register_screen.dart';
 import '../player/player_screen.dart';
 import '../settings/privacy_policy_screen.dart';
 import '../../widgets/common/server_notice_dialog.dart';
+import '../../widgets/common/class_level_sheet.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -257,13 +258,58 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     return false;
   }
 
+  /// Misafir mi? (guest token'i henuz alinmamis kullanici da misafir sayilir)
+  bool _misafirMi(AuthProvider auth) => auth.isGuest || !auth.isAuthenticated;
+
+  /// İsteğe gidecek sınıf seviyesi.
+  /// Kayıtlı: hesabın seviyesi. Misafir: kullanıcıya işlenmiş seviye, o daha
+  /// yazılmadıysa (guest token yarışı) cihazdaki değer.
+  String? _sinifSeviyesi(AuthProvider auth) {
+    final hesap = auth.user?.classLevel;
+    if (hesap != null) return hesap;
+    return _misafirMi(auth) ? auth.guestClassLevel : null;
+  }
+
+  /// MİSAFİR SINIF SEVİYESİ — ilk istekte bir kez sorulur, cihaza yazılır.
+  /// Kullanıcı kararı 2026-08-17: misafirin ilk isteğinde veri-kullanım ONAY
+  /// diyaloğu YERİNE bu sorulur (onay metni sheet'in içinde bilgi notu olarak
+  /// durur, ayrıca onaylatılmaz). Sonraki isteklerde hiç görünmez.
+  /// false → istek gönderilmez.
+  Future<bool> _misafirSinifiHazir(AuthProvider authProvider) async {
+    if (_sinifSeviyesi(authProvider) != null) return true;
+    if (!mounted) return false;
+
+    final secim = await showSinifSeviyesiSheet(context);
+    if (secim == null) {
+      // Vazgeçildi: composer içeriği chat_input'ta zaten temizlendiği için
+      // sessiz kalma "gönderdim ama hiçbir şey olmadı" gibi görünür.
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Sınıf seviyesi seçilmedi — soru gönderilmedi'),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+      return false;
+    }
+    await authProvider.setGuestClassLevel(secim);
+    return true;
+  }
+
   Future<void> _handleSend(File? image, String? text) async {
     final chatProvider = context.read<ChatProvider>();
     final authProvider = context.read<AuthProvider>();
 
-    // AI veri kullanim onayi kontrol et
-    final consented = await _checkAiConsent();
-    if (!consented) return;
+    if (_misafirMi(authProvider)) {
+      // Misafir: onay yok, sınıf seviyesi (bir kez) — bkz. _misafirSinifiHazir
+      if (!await _misafirSinifiHazir(authProvider)) return;
+    } else {
+      // Kayıtlı kullanıcı: mevcut AI veri kullanım onayı korunur
+      final consented = await _checkAiConsent();
+      if (!consented) return;
+    }
 
     // Check internet first
     final hasNet = await chatProvider.checkInternetConnection();
@@ -301,21 +347,20 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       return;
     }
 
-    // EFEKTİF mod: sohbet kilitliyse sohbetinki — oynatıcıya düşme kararı da
-    // gerçekte gönderilen modla aynı olmalı (kilitli sohbette global toggle yanıltır).
-    final isDirectChat = !chatProvider.effectiveDrawOnImage;
-
     final result = await chatProvider.sendMessage(
       imageFile: image,
       prompt: text,
-      classLevel: authProvider.user?.classLevel,
+      classLevel: _sinifSeviyesi(authProvider),
     );
     _scrollToBottom(force: true);
 
     if (result == null || !mounted) return;
 
-    // Direct chat modu: PlayerScreen'e gitme, chat'te kal
-    if (isDirectChat) {
+    // Oynatıcıya (canvas.html) YALNIZ istek gerçekten çizimli gittiyse geçilir.
+    // Karar gönderimden ÖNCE toggle'a bakılarak verilemez: çizim açıkken
+    // fotoğrafsız gönderilen mesaj provider'da çizimsize düşürülüyor, o hâlde
+    // toggle'a bakan eski kod düz metin mesajında da canvas'ı açıyordu.
+    if (!result.drawOnImageUsed) {
       return;
     }
 
@@ -373,7 +418,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     await chatProvider.sendMessage(
       prompt: fence,
-      classLevel: authProvider.user?.classLevel,
+      classLevel: _sinifSeviyesi(authProvider),
       forceDirectChat: true,   // çizim açık olsa bile oynatıcıya düşme, sohbette kal
     );
     _scrollToBottom(force: true);
@@ -402,14 +447,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final result = await chatProvider.sendMessage(
       imageFile: annotation.imageFile,
       prompt: followupPrompt,
-      classLevel: authProvider.user?.classLevel,
+      classLevel: _sinifSeviyesi(authProvider),
       markedRegion: annotation.markedRegion,
       hintRef: annotation.hintRef,
       studentQuestion: studentQuestion,
     );
     _scrollToBottom(force: true);
 
-    if (result != null && mounted) {
+    // Takip turu da yalnız gerçekten çizimli gittiyse oynatıcıya döner
+    // (aynı tek kaynak: gönderilen mod).
+    if (result != null && result.drawOnImageUsed && mounted) {
       final token = authProvider.token ?? '';
       String? imageUrl;
       if (result.imagePath != null) {

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -56,6 +57,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   // UI state
   bool _isLoading = true;
+  bool _pageLoaded = false; // canvas.html ilk boyamayi yapti mi
+  Timer? _postLoadErrorTimer; // yukleme SONRASI ana-cerceve hatasi icin canlilik yoklamasi
 
   // Playback state
   bool _isPlaying = false;
@@ -72,6 +75,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   void dispose() {
+    _postLoadErrorTimer?.cancel();
     _audioService.stop();
     _audioService.dispose();
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
@@ -91,16 +95,54 @@ class _PlayerScreenState extends State<PlayerScreen> {
       ..setBackgroundColor(Colors.black)
       ..addJavaScriptChannel('FlutterChannel', onMessageReceived: _onJsMessage)
       ..setNavigationDelegate(NavigationDelegate(
-        onPageFinished: (_) {
+        onPageFinished: (String finishedUrl) {
+          // ARA NAVIGASYON KORUMASI: bazi WebView surumleri gercek yuklemeden
+          // once about:blank icin de onPageFinished uretir. Erken _pageLoaded=true
+          // olursa ASIL yukleme hatasi yutulur -> siyah ekran, mesaj yok.
+          if (finishedUrl.isEmpty || finishedUrl.startsWith('about:')) return;
+          _pageLoaded = true;
           if (mounted) setState(() => _isLoading = false);
         },
         onWebResourceError: (error) {
-          if (mounted) {
+          // BEYAZ/KARANLIK EKRAN FIX (2026-08-10): bu callback SADECE ana sayfa
+          // icin degil, HER alt kaynak icin (gorsel, css, font, ses) atesleniyor.
+          // Tek bir gecici /uploads ya da CDN hatasi, oynatici altta kendini
+          // toparlasa bile tam-ekran hata panelini kalici olarak aciyordu.
+          // Yalniz ana cerceve hatasi ve yalniz ilk boyamadan ONCE fatal sayilir.
+          // isForMainFrame null gelirse (bilinmiyor) FATAL kabul et — gercek bir
+          // ana-cerceve hatasini sessizce yutmayalim.
+          if (!(error.isForMainFrame ?? true)) return;
+          if (!_pageLoaded) {
+            if (mounted) {
+              setState(() {
+                _isLoading = false;
+                _errorMessage = 'Sayfa yuklenemedi: ${error.description}';
+              });
+            }
+            return;
+          }
+          // YUKLEME SONRASI ana-cerceve hatasi iki cok farkli sey olabilir:
+          //  (a) gecici bir kaynak/ag hickirigi — oynatici altta calismaya devam eder
+          //      (eski davranis: kalici tam-ekran panel = asil bug),
+          //  (b) WebView icerik surecinin OLMESI (iOS/WKWebView jetsam,
+          //      webContentProcessTerminated) — sayfa gercekten olur, bembeyaz kalir.
+          // Kosulsuz 'return' (b)'yi de yutuyordu. Karari TAHMINLE degil YOKLAYARAK ver:
+          // sayfaya kucuk bir JS calistir; cevap gelirse (a), gelmezse (b).
+          _postLoadErrorTimer?.cancel();
+          _postLoadErrorTimer = Timer(const Duration(seconds: 3), () async {
+            var alive = false;
+            try {
+              final r = await _webViewController.runJavaScriptReturningResult('1+1');
+              alive = r.toString().contains('2');
+            } catch (_) {
+              alive = false;
+            }
+            if (alive || !mounted) return;
             setState(() {
               _isLoading = false;
-              _errorMessage = 'Sayfa yuklenemedi: ${error.description}';
+              _errorMessage = 'Oynatici yanit vermiyor: ${error.description}';
             });
-          }
+          });
         },
       ))
       ..loadRequest(Uri.parse(url));
@@ -118,6 +160,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
     try {
       final data = jsonDecode(message.message) as Map<String, dynamic>;
       final event = data['event'] as String? ?? '';
+      // KURTARMA FIX (2026-08-10): _errorMessage bir kez set edilince ASLA
+      // temizlenmiyordu → gecici bir hatanin paneli, oynatici altta calismaya
+      // devam etse bile ekrani kalici kapatiyordu. Oynaticidan saglikli bir
+      // ilerleme sinyali gelirse panel kalkar.
+      const recoverySignals = {'imageLoaded', 'ready', 'stepRendered', 'timeUpdate', 'stepChange'};
+      if (_errorMessage != null && recoverySignals.contains(event)) {
+        if (mounted) setState(() => _errorMessage = null);
+      }
       switch (event) {
         case 'imageLoaded':
           _handleImageLoaded(data);

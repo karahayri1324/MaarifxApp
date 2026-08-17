@@ -17,6 +17,11 @@ class AuthService {
   static const String _userKey = 'auth_user';
   static const String _guestKey = 'is_guest';
   static const String _deviceIdKey = 'guest_device_id';
+  // Misafirin sectigi sinif seviyesi CIHAZA yazilir: sunucuda misafir kaydi yok
+  // (guest_<deviceId> anlik uretilir), seviye her istekle birlikte gonderilir.
+  // Cikis/giris yollarinda BILEREK silinmez — ayni telefonda ayni ogrenci var,
+  // misafire donunce yeniden sorulmasin.
+  static const String _guestClassLevelKey = 'guest_class_level';
 
   String get _baseUrl => AppConfig.apiUrl;
 
@@ -245,6 +250,18 @@ class AuthService {
   Future<String?> getSavedDeviceId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_deviceIdKey);
+  }
+
+  /// Misafirin sinif seviyesini cihaza yaz
+  Future<void> saveGuestClassLevel(String classLevel) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_guestClassLevelKey, classLevel);
+  }
+
+  /// Cihazda kayitli misafir sinif seviyesi (yoksa null → ilk istekte sorulur)
+  Future<String?> getGuestClassLevel() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_guestClassLevelKey);
   }
 
   /// Cikis yap

@@ -545,12 +545,16 @@ class ChatProvider extends ChangeNotifier {
     // MOD KİLİDİ: sohbet başladıysa efektif mod SOHBETİNKİdir (global toggle değil).
     // quiz cevabı (forceDirectChat) istisna: backend bunu muaf tutuyor.
     final bool startingNew = _currentConversationId == null;
-    // GÖRSELSİZ YENİ SOHBET: çizim toggle'ı açık ama fotoğraf yoksa istek otomatik
-    // ÇİZİMSİZ gider. Çizim, soru görselinin ÜZERİNE yapılır — görsel yokken çizim
-    // modu zaten imkânsız. Eskiden gönder butonu kilitleniyordu; artık gönderilebilir
-    // ve mod sessizce metne düşer (sohbet de o modda kilitlenir, tutarlı kalır).
+    // GÖRSELSİZ MESAJ → ÇİZİMSİZ: çizim toggle'ı/sohbet modu çizimli olsa bile
+    // fotoğrafsız istek otomatik ÇİZİMSİZ gider. Çizim, soru görselinin ÜZERİNE
+    // yapılır — görsel yokken çizim modu zaten imkânsız.
+    // 2026-08-12: "startingNew" şartı KALDIRILDI — çözüm açıkken yazılan düz metin
+    // takibi oynatıcıyı (canvas.html) açıyordu; artık çizimsiz düşer, oynatıcı
+    // açılmaz. İşaretli bölge / hint / soru-üzeri takipler ÇİZİMLİ yolda kalır
+    // (backend'in mod kilidi muafiyeti duz_gorselsiz ile eş koşullar).
     final bool gorselsizDusus =
-        startingNew && forceDirectChat != true && effectiveDrawOnImage && imageFile == null;
+        forceDirectChat != true && effectiveDrawOnImage && imageFile == null &&
+        markedRegion == null && hintRef == null && studentQuestion == null;
     final effDraw = (forceDirectChat == true || gorselsizDusus) ? false : effectiveDrawOnImage;
     // Coklu request: bloklama yok. Bu yüzden ilk gönderim uçuştayken ikincisi de
     // AYNI modu kullansın diye modu şimdiden kilitliyoruz; başarısızlıkta geri alınır.
@@ -698,6 +702,10 @@ class ChatProvider extends ChangeNotifier {
     }
 
     _currentConversationId = result.conversationId;
+    // Gerçekten gönderilen modu sonuca yaz — çağıran ekran oynatıcıya geçip
+    // geçmeyeceğine BUNA bakarak karar veriyor. Toggle'a bakarsa, fotoğrafsız
+    // mesajda çizimsize düşürdüğümüz halde canvas'ı açardı.
+    result.drawOnImageUsed = effDraw;
     // Sohbetin modu kilitlendi (quiz turu mod belirlemez — o zaten muaf).
     if (forceDirectChat != true) _conversationMode ??= effDraw;
     _activeRequests.add(result.requestId);

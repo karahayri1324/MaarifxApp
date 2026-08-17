@@ -8,7 +8,9 @@ import 'package:exif/exif.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import '../../config/theme.dart';
+import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
+import '../common/class_level_sheet.dart';
 
 class ChatInput extends StatefulWidget {
   final Function(File? image, String? text) onSend;
@@ -403,8 +405,13 @@ class _ChatInputState extends State<ChatInput> {
   void _showImagePicker() {
     showModalBottomSheet(
       context: context,
+      // KAYDIRILABİLİR: sheet varsayılan olarak ekranın 9/16'sıyla sınırlıdır;
+      // içerik (detay + 2 toggle + sınıf satırı + kamera/galeri) alçak ekranlarda
+      // bu sınırı aşıp "Galeri" satırını kesiyordu (ölçüldü: 600 yükseklikte
+      // 118 px taşma). Kaydırma taşmayı da, kesilmeyi de bitirir.
       builder: (sheetContext) => SafeArea(
-        child: Column(
+        child: SingleChildScrollView(
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const SizedBox(height: 8),
@@ -429,6 +436,13 @@ class _ChatInputState extends State<ChatInput> {
             // Dusunme sureci (model reasoning) toggle
             _EnableThinkingToggle(),
             const Divider(height: 1),
+
+            // MISAFIR sinif seviyesi: yanlis secimi duzeltebilsin (kayitlida bu
+            // Ayarlar > Sinif Seviyesi'nde; misafirde menu/ayarlar ekrani yok).
+            // Kayitli kullanicida bu blok HIC cizilmez (ayirici dahil).
+            _MisafirSinifSatiri(
+              onTap: () => _misafirSinifDegistir(sheetContext),
+            ),
 
             ListTile(
               leading: Container(
@@ -464,7 +478,29 @@ class _ChatInputState extends State<ChatInput> {
             ),
             const SizedBox(height: 16),
           ],
+          ),
         ),
+      ),
+    );
+  }
+
+  /// Misafirin sınıf seviyesini değiştirmesi. Önce seçenek sheet'i kapatılır
+  /// (üst üste iki modal açık kalmasın), sonra seviye sheet'i açılır.
+  Future<void> _misafirSinifDegistir(BuildContext sheetContext) async {
+    final auth = context.read<AuthProvider>();
+    final mevcut = auth.user?.classLevel ?? auth.guestClassLevel;
+    Navigator.pop(sheetContext);
+    if (!mounted) return;
+    final secim = await showSinifSeviyesiSheet(context, mevcut: mevcut);
+    if (secim == null || secim == mevcut) return;
+    await auth.setGuestClassLevel(secim);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Sınıf seviyesi güncellendi: '
+            '${kSinifSeviyeleri.firstWhere((s) => s.deger == secim).etiket}'),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
       ),
     );
   }
@@ -585,6 +621,76 @@ class _DrawOnImageToggle extends StatelessWidget {
         ],
       ),
       ),
+    );
+  }
+}
+
+/// MİSAFİR sınıf seviyesi satırı (yalnız misafirde görünür; kayıtlı kullanıcıda
+/// ayırıcısıyla birlikte HİÇ çizilmez — seviyesi hesabında ve Ayarlar'da).
+class _MisafirSinifSatiri extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _MisafirSinifSatiri({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    final misafir = auth.isGuest || !auth.isAuthenticated;
+    if (!misafir) return const SizedBox.shrink();
+
+    final deger = normalizeSinifSeviyesi(
+        auth.user?.classLevel ?? auth.guestClassLevel);
+    final etiket = deger == null
+        ? 'Seç'
+        : kSinifSeviyeleri.firstWhere((s) => s.deger == deger).etiket;
+
+    return Column(
+      children: [
+        GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Row(
+              children: [
+                Icon(Icons.school_outlined,
+                    size: 18, color: context.textSecondary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Sınıf Seviyesi',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: context.textPrimary,
+                        ),
+                      ),
+                      Text(
+                        'Çözümler bu seviyeye göre anlatılır',
+                        style: TextStyle(fontSize: 12, color: context.textMuted),
+                      ),
+                    ],
+                  ),
+                ),
+                Text(
+                  etiket,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: AppTheme.primary,
+                  ),
+                ),
+                Icon(Icons.chevron_right_rounded,
+                    size: 18, color: context.textMuted),
+              ],
+            ),
+          ),
+        ),
+        const Divider(height: 1),
+      ],
     );
   }
 }

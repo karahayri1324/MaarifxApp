@@ -14,6 +14,10 @@ class AuthProvider extends ChangeNotifier {
   bool _isLoading = false;
   bool _isGuest = false;
   String? _deviceId;
+  // Misafirin cihaza yazılmış sınıf seviyesi. Kayıtlı kullanıcıda seviye
+  // HESABIN kendisidir (sunucu users.class_level'i kullanır, istemciyi yok sayar);
+  // misafirde sunucu tarafında kayıt olmadığı için kaynak burasıdır.
+  String? _guestClassLevel;
 
   AuthProvider({AuthService? authService})
       : _authService = authService ?? AuthService() {
@@ -28,12 +32,20 @@ class AuthProvider extends ChangeNotifier {
   bool get isAuthenticated => _status == AuthStatus.authenticated;
   bool get isGuest => _isGuest;
   String? get deviceId => _deviceId;
+  String? get guestClassLevel => _guestClassLevel;
 
   void _init() {
     _tryAutoLogin();
   }
 
   Future<void> _tryAutoLogin() async {
+    try {
+      // Misafir sinif seviyesi: auto-login sonucundan BAGIMSIZ okunur (token
+      // alinamasa bile cihazdaki secim bilinsin, kullaniciya tekrar sorulmasin).
+      _guestClassLevel = await _authService.getGuestClassLevel();
+    } catch (e) {
+      debugPrint('[AuthProvider] Misafir sinif seviyesi okunamadi: $e');
+    }
     try {
       // Oncelik: normal kullanici auto-login
       final result = await _authService.tryAutoLogin();
@@ -46,7 +58,11 @@ class AuthProvider extends ChangeNotifier {
           if (_deviceId != null) {
             try {
               final guestResult = await _authService.getGuestToken(_deviceId!);
-              _user = guestResult.user;
+              // Cihazdaki seviye kullaniciya islenir → user.classLevel okuyan
+              // tum cagri noktalari (chat_screen gonderimleri) degismeden calisir.
+              _user = _guestClassLevel == null
+                  ? guestResult.user
+                  : guestResult.user.copyWith(classLevel: _guestClassLevel);
               _token = guestResult.token;
               _isGuest = true;
               _status = AuthStatus.authenticated;
@@ -124,7 +140,10 @@ class AuthProvider extends ChangeNotifier {
 
     try {
       final result = await _authService.getGuestToken(deviceId);
-      _user = result.user;
+      _guestClassLevel ??= await _authService.getGuestClassLevel();
+      _user = _guestClassLevel == null
+          ? result.user
+          : result.user.copyWith(classLevel: _guestClassLevel);
       _token = result.token;
       _isGuest = true;
       _deviceId = deviceId;
@@ -150,6 +169,24 @@ class AuthProvider extends ChangeNotifier {
     _isLoading = false;
     notifyListeners();
     return false;
+  }
+
+  /// Misafirin sınıf seviyesini cihaza yaz + oturumdaki kullanıcıya işle.
+  /// Kayıtlı kullanıcıda ÇAĞRILMAZ: orada seviye hesabın kendisidir ve ayarlardan
+  /// (updateProfile) değişir; sunucu kayıtlı istekte istemcinin gönderdiğini
+  /// yok sayıp users.class_level'i kullanır.
+  Future<void> setGuestClassLevel(String classLevel) async {
+    _guestClassLevel = classLevel;
+    if (_user != null) {
+      _user = _user!.copyWith(classLevel: classLevel);
+    }
+    notifyListeners();
+    // Yazma en sona: hata olsa bile oturum içinde seçim geçerli kalır.
+    try {
+      await _authService.saveGuestClassLevel(classLevel);
+    } catch (e) {
+      debugPrint('[AuthProvider] Misafir sinif seviyesi yazilamadi: $e');
+    }
   }
 
   void updateUser(UserModel updatedUser) {

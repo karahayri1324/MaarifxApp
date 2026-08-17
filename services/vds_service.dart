@@ -41,6 +41,12 @@ class SendMessageResult {
   final String? imagePath;
   final bool processorNotified;
 
+  /// İsteğin GERÇEKTEN hangi modda gönderildiği (sunucudan gelmez, gönderen
+  /// doldurur). Ekranın oynatıcıya geçip geçmeyeceği buna bakmalı: global
+  /// toggle "çizim açık" dese bile fotoğrafsız mesaj çizimsize düşürülüyor,
+  /// bu durumda canvas AÇILMAMALI.
+  bool drawOnImageUsed = true;
+
   SendMessageResult({
     required this.conversationId,
     required this.userMessageId,
