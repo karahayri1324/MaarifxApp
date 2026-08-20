@@ -58,6 +58,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // UI state
   bool _isLoading = true;
   bool _pageLoaded = false; // canvas.html ilk boyamayi yapti mi
+  bool _orientationSet = false; // oryantasyon ilk gorselde BIR KEZ kilitlenir
   Timer? _postLoadErrorTimer; // yukleme SONRASI ana-cerceve hatasi icin canlilik yoklamasi
 
   // Playback state
@@ -151,6 +152,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final platform = _webViewController.platform;
     if (platform is AndroidWebViewController) {
       platform.setMediaPlaybackRequiresUserGesture(false);
+      // Sistem "Yazı boyutu" ayarı (fontScale %100-200) WebView'de tüm px
+      // fontları çarpıp oynatıcı düzenini bozuyordu (scrubber'ın ezilmesi).
+      // Oynatıcı kendi tipografisini yönetir — textZoom sabitlenir.
+      // (canvas.html sunucu tarafında da kendi telafisini yapar; bu satır
+      // yalnız yeni APK'larda ek güvence.)
+      platform.setTextZoom(100);
     }
   }
 
@@ -265,6 +272,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final h = (data['height'] as num?)?.toInt() ?? 0;
     if (w > 0 && h > 0) {
       setState(() => _isLoading = false);
+      // Oryantasyon YALNIZ ilk görselde kilitlenir: sunucu ders ortasında
+      // aynı görseli (catch-up) veya EXIF'i düzeltilmiş _clean kopyayı yeniden
+      // gönderebiliyor — boyut ekseni değişirse ekran çözüm ortasında zorla
+      // dönüyordu (canvas resize + scrubber zıplaması).
+      if (_orientationSet) return;
+      _orientationSet = true;
       if (w > h) {
         SystemChrome.setPreferredOrientations([
           DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight,
