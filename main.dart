@@ -7,6 +7,8 @@ import 'providers/auth_provider.dart';
 import 'providers/chat_provider.dart';
 import 'providers/theme_provider.dart';
 import 'screens/splash_screen.dart';
+import 'screens/auth/login_screen.dart';
+import 'screens/auth/register_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -64,6 +66,14 @@ class MaarifxApp extends StatelessWidget {
               darkTheme: AppTheme.darkTheme,
               themeMode: themeProvider.themeMode,
               home: const SplashScreen(),
+              // Adlandırılmış rotalar: SUNUCU bildirim butonu (NoticeAction kind:route)
+              // uygulama-içi bir yola gidebilsin diye. Bunlar tanımlı olmadan
+              // runNoticeAction'daki pushNamed başarısız oluyordu (ör. misafir
+              // limit balonundaki "Kayıt ol"). '/' BURAYA konmaz — home ile çakışır.
+              routes: {
+                '/login': (_) => const LoginScreen(),
+                '/register': (_) => const RegisterScreen(),
+              },
             ),
           );
         },

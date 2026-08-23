@@ -29,8 +29,15 @@ Future<void> runNoticeAction(BuildContext context, NoticeAction a) async {
       }
       break;
     case NoticeActionKind.route:
+      // Güvenlik ağı: sunucu tanımsız bir rota gönderirse (main.dart'ta kayıtlı
+      // değil) pushNamed FIRLATIR. Açık uçlu sistemde sunucu her şeyi
+      // gönderebildiği için try/catch şart — buton çalışmasa bile app çökmesin.
       if (a.value.startsWith('/') && context.mounted) {
-        Navigator.of(context).pushNamed(a.value);
+        try {
+          Navigator.of(context).pushNamed(a.value);
+        } catch (_) {
+          // Bilinmeyen rota — sessizce yok say (kapatmak yeterli).
+        }
       }
       break;
     case NoticeActionKind.dismiss:
