@@ -12,7 +12,9 @@ class QuizCard extends StatefulWidget {
   final QuizBlock quiz;
 
   /// fence metnini alır (```maarifx-quiz-answer …```), sohbete gönderir.
-  final Future<void> Function(String fence)? onSubmit;
+  /// Cevabı gönderir. Dönen `true` = gerçekten gönderildi.
+  /// `false` dönerse kart kilitlenmez, kullanıcı yeniden deneyebilir.
+  final Future<bool> Function(String fence)? onSubmit;
 
   const QuizCard({super.key, required this.quiz, this.onSubmit});
 
@@ -96,8 +98,13 @@ class _QuizCardState extends State<QuizCard> {
       userAnswer: ans,
       attempt: _store.attemptOf(widget.quiz.id) + 1,
     );
-    _store.record(widget.quiz.id, ans);
     try {
+      // KİLİT BURADA KURULMAZ. Eskiden `_store.record` await'ten ÖNCEYDİ:
+      // internet yokken cevap hiç gitmediği hâlde kart "cevaplandı" diye
+      // kilitleniyordu. Kaydı sonrasına almak da yetmiyor — hata balonundaki
+      // "Tekrar Dene" yolu bu karttan geçmediği için orada kilit hiç kurulmaz,
+      // aynı cevap ikinci kez gönderilebilirdi. Kayıt artık gönderimin TEK
+      // ortak noktasında: ChatProvider.sendMessage başarı yolunda.
       await widget.onSubmit?.call(fence);
     } finally {
       if (mounted) setState(() => _sending = false);

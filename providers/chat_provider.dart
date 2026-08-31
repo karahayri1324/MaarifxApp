@@ -85,6 +85,44 @@ class ChatProvider extends ChangeNotifier {
   // Retry data: errorMessageId -> {imageFile, prompt, classLevel}
   final Map<String, _RetryData> _retryData = {};
 
+  /// SESSİZLİK BEKÇİSİ: her uçuştaki istek için bir zamanlayıcı.
+  ///
+  /// Akış sırasında processor çökerse, VDS worker'ı düşerse ya da soket yarı
+  /// açık ölürse istemciye NE `request_complete` NE `request_error` gelir.
+  /// Öncesinde hiçbir zaman aşımı yoktu: mesaj "Çözüm hazırlanıyor…"
+  /// spinner'ında SONSUZA KADAR kalıyordu ve kullanıcının tek çıkışı
+  /// uygulamayı öldürmekti. Bekçi her akış olayında sıfırlanır; yalnız
+  /// gerçek sessizlik onu ateşler.
+  final Map<String, Timer> _watchdogs = {};
+
+  /// Bekçisi ateşlemiş ama HÂLÂ izlenen istekler. Bunlardan bir sinyal gelirse
+  /// mesaj akışa geri döner ([_bekciCanlandir]).
+  final Set<String> _bekciDusenler = {};
+
+  /// requestId → gönderim parametreleri. Akış tarafında doğan hatalarda
+  /// (`request_error` / bekçi) "Tekrar Dene" verisini buradan kuruyoruz;
+  /// yoksa `canRetry` false dönüyor ve kullanıcı fotoğrafını + sorusunu
+  /// kaybediyordu.
+  final Map<String, _RetryData> _requestRetry = {};
+
+  /// Bekçi eşiği. SUNUCUNUN KENDİ eşiklerinin ÜSTÜNDE olmak ZORUNDA.
+  ///
+  /// İlk denemede 90 sn seçilmişti; bu YANLIŞTI ve sağlıklı istekleri
+  /// öldürüyordu. Backend meşru sessizliği ÖLÇEREK bütçelemiş:
+  ///   processor.py WATCHDOG_IDLE_SEC        = 240 (üretimde Maarifxstart.sh:178)
+  ///   processor.py WATCHDOG_ORACLE_IDLE_SEC = 600 (MAX / gemini kolu)
+  /// Maarifxstart.sh:162-166 ölçümü: meşru `first_step_ms` MAKSİMUMU 119 sn,
+  /// p90 = 77 sn. Üstelik çizimli+MAX akışında app soketine giden sinyaller
+  /// bilerek kısıtlı (server.js DSL kapısı token'ı kesiyor, MAX'ta thinking
+  /// gönderilmiyor, `_send_progress` monotonik olduğu için tavana vurunca
+  /// susuyor) — yani UZUN ve MEŞRU sessizlik normaldir.
+  ///
+  /// Sunucu bir takılmayı zaten yakalayıp dostane bir `request_error`
+  /// gönderiyor. Bu bekçinin işi o hatayı yakalamak DEĞİL; o hatanın bize hiç
+  /// ULAŞMADIĞI durumu (ölü taşıma katmanı) yakalamak. Bu yüzden sunucunun en
+  /// geniş penceresinden (600) SONRA devreye girer.
+  static const Duration _sessizlikEsigi = Duration(seconds: 660);
+
   StreamSubscription? _messageSubscription;
   StreamSubscription? _connectionSubscription;
 
@@ -127,7 +165,7 @@ class ChatProvider extends ChangeNotifier {
     _displayName = displayName;
 
     if (userId != null && token != null) {
-      _vdsService.setAuth(token, userId);
+      _vdsService.setAuth(token);
       _connectWebSocket();
     }
   }
@@ -275,9 +313,92 @@ class ChatProvider extends ChangeNotifier {
     );
   }
 
+  // ─── Sessizlik bekçisi ───
+
+  /// İsteği izlemeye al ya da sayacı sıfırla. Her akış olayında çağrılır.
+  void _bekciKur(String requestId) {
+    if (!_activeRequests.contains(requestId)) return;
+    _watchdogs[requestId]?.cancel();
+    _watchdogs[requestId] = Timer(_sessizlikEsigi, () => _bekciAtesledi(requestId));
+  }
+
+  void _bekciSil(String requestId) {
+    _watchdogs.remove(requestId)?.cancel();
+    _requestRetry.remove(requestId);
+    _bekciDusenler.remove(requestId);
+  }
+
+  static const String _bekciHataMetni =
+      'Sunucudan uzun süredir yanıt gelmedi. Bağlantın kesilmiş ya da işlemci '
+      'yanıt veremiyor olabilir. Tekrar deneyebilirsin.';
+
+  /// Sessizlik eşiği doldu.
+  ///
+  /// YIKICI DEĞİL: istek `_activeRequests` içinde KALIR. İlk sürümde buradan
+  /// siliniyordu ve bu ağır bir hataydı — tüm akış işleyicileri bu kümeyi kapı
+  /// olarak kullandığı için geç gelen GERÇEK akış (özellikle sunucunun
+  /// `request_complete`'ten hemen önce yolladığı 'session-signal') sessizce
+  /// yutuluyor, çözüm üretilmiş olmasına rağmen "Çözümü İzle" butonu hiç
+  /// çıkmıyordu; sunucunun kopukluk telafisi de (server.js `telafiKaydet`) aynı
+  /// kapıda düşüyordu. Artık yalnız UI uyarıya çevriliyor; gerçek bir sinyal
+  /// gelirse [_bekciCanlandir] her şeyi geri alıyor.
+  void _bekciAtesledi(String requestId) {
+    _watchdogs.remove(requestId);
+    if (!_activeRequests.contains(requestId)) return;   // arada tamamlanmışsa dokunma
+
+    _bekciDusenler.add(requestId);
+
+    final msgIndex = _findAiMsgIndex(requestId);
+    if (msgIndex != -1) {
+      final msg = messages[msgIndex];
+      msg.text = _bekciHataMetni;
+      msg.status = MessageStatus.error;
+      msg.thinkingDone = true;
+      // KOPYALA (taşıma DEĞİL): istek hâlâ canlı sayıldığı için sonradan
+      // gelecek gerçek bir `request_error` de aynı veriye ihtiyaç duyabilir.
+      final data = _requestRetry[requestId];
+      if (data != null) _retryData[msg.id] = data;
+    }
+    notifyListeners();
+  }
+
+  /// Bekçi ateşledikten SONRA o istekten gerçek bir sinyal geldi: uyarıyı geri
+  /// al, mesajı akışa döndür. Fikir değiştirmek serbest — asıl kayıp, geç gelen
+  /// çözümü hiç göstermemekti.
+  void _bekciCanlandir(String requestId) {
+    if (!_bekciDusenler.remove(requestId)) return;
+    final msgIndex = _findAiMsgIndex(requestId);
+    if (msgIndex == -1) return;
+    final msg = messages[msgIndex];
+    // Yalnız BİZİM yazdığımız uyarı geri alınır; sunucudan gelmiş gerçek bir
+    // hata metnine dokunulmaz.
+    if (msg.status == MessageStatus.error && msg.text == _bekciHataMetni) {
+      msg.status = MessageStatus.streaming;
+      msg.text = '';
+      _retryData.remove(msg.id);
+    }
+  }
+
+  /// requestId'ye bağlı gönderim parametrelerini hata mesajının id'sine taşır,
+  /// böylece AIMessageWidget "Tekrar Dene" butonunu gösterebilir.
+  void _retryDevret(String requestId, String messageId) {
+    final data = _requestRetry.remove(requestId);
+    if (data != null) _retryData[messageId] = data;
+  }
+
   // ─── VDS WebSocket Mesaj İşleme ───
 
   void _handleVdsMessage(VdsMessage msg) {
+    // Bu istekten HERHANGİ bir sinyal geldi → hâlâ hayatta, bekçiyi sıfırla.
+    final canliId = msg.data['requestId'] as String?;
+    if (canliId != null) {
+      _bekciCanlandir(canliId);   // yanlış alarmı geri al
+      if (msg.type != VdsMessageType.requestComplete &&
+          msg.type != VdsMessageType.requestError) {
+        _bekciKur(canliId);
+      }
+    }
+
     switch (msg.type) {
       case VdsMessageType.streamToken:
         _handleStreamToken(msg.data);
@@ -425,6 +546,7 @@ class ChatProvider extends ChangeNotifier {
     if (requestId == null) return;
 
     _activeRequests.remove(requestId);
+    _bekciSil(requestId);
 
     final msgIndex = _findAiMsgIndex(requestId);
     if (msgIndex != -1) {
@@ -433,6 +555,14 @@ class ChatProvider extends ChangeNotifier {
         messages[msgIndex].text = resultText;
       }
       messages[msgIndex].status = MessageStatus.complete;
+      // KURŞUN GEÇİRMEZ YOL: sunucu `hasDrawing`i request_complete'in İÇİNDE
+      // taşıyor (server.js:1585) — tam da ayrı 'session-signal' stream_data'sı
+      // yarışta düşerse "Çözümü İzle" butonu kaybolmasın diye. Flutter bunu
+      // OKUMUYORDU; artık okuyor. Düz metin/çizimsiz turda sunucu false
+      // gönderdiği için buton yine ÇIKMAZ (kasıtlı davranış korunur).
+      if (data['hasDrawing'] == true) {
+        messages[msgIndex].hasSessionData = true;
+      }
       // hasSessionData yalnızca stream sırasında session verisi (command/audio/renderedStep) geldiyse true olur
       // Burada tekrar true yapmıyoruz — metin cevaplarında yanlışlıkla "Çözümü İzle" butonu çıkmasın.
       // ÇİZİMLİ cevapta buton, backend'in request_complete'ten HEMEN ÖNCE yolladığı stream_data+
@@ -449,6 +579,8 @@ class ChatProvider extends ChangeNotifier {
     if (requestId == null) return;
 
     _activeRequests.remove(requestId);
+    _watchdogs.remove(requestId)?.cancel();
+    _bekciDusenler.remove(requestId);
 
     final msgIndex = _findAiMsgIndex(requestId);
     if (msgIndex != -1) {
@@ -456,6 +588,14 @@ class ChatProvider extends ChangeNotifier {
       final userFriendlyError = _getUserFriendlyError(error);
       messages[msgIndex].text = userFriendlyError;
       messages[msgIndex].status = MessageStatus.error;
+      messages[msgIndex].thinkingDone = true;
+      // AKIŞ TARAFI HATASINDA DA "TEKRAR DENE": eskiden retry verisi yalnız
+      // gönderim anında (`_addErrorMessage`) kuruluyordu; processor hatası
+      // bu yoldan geldiğinde buton hiç çıkmıyor, kullanıcının fotoğrafı ve
+      // sorusu kayboluyordu.
+      _retryDevret(requestId, messages[msgIndex].id);
+    } else {
+      _requestRetry.remove(requestId);
     }
 
     notifyListeners();
@@ -706,9 +846,31 @@ class ChatProvider extends ChangeNotifier {
     // geçmeyeceğine BUNA bakarak karar veriyor. Toggle'a bakarsa, fotoğrafsız
     // mesajda çizimsize düşürdüğümüz halde canvas'ı açardı.
     result.drawOnImageUsed = effDraw;
+    // Akış tarafında doğacak hatalar için gönderim parametrelerini sakla ve
+    // sessizlik bekçisini kur.
+    _requestRetry[result.requestId] = _RetryData(
+      imageFile: imageFile,
+      prompt: prompt,
+      classLevel: classLevel,
+      forceDirectChat: forceDirectChat == true,
+      markedRegion: markedRegion,
+      hintRef: hintRef,
+      studentQuestion: studentQuestion,
+    );
     // Sohbetin modu kilitlendi (quiz turu mod belirlemez — o zaten muaf).
     if (forceDirectChat != true) _conversationMode ??= effDraw;
     _activeRequests.add(result.requestId);
+    _bekciKur(result.requestId);
+
+    // QUIZ KİLİDİ TEK KAYNAKTAN. Kart kendi başına kaydetseydi `retryMessage`
+    // yolu (hata balonundaki "Tekrar Dene") kaydı atlar; cevap modele gittiği
+    // hâlde kart açık kalır ve öğrenci AYNI cevabı ikinci kez gönderirdi,
+    // üstelik `attempt` hâlâ 1 olarak. Gönderim hangi yoldan gelirse gelsin
+    // buradan geçtiği için kilit burada kuruluyor.
+    if (prompt != null) {
+      final qa = parseQuizAnswer(prompt);
+      if (qa != null) QuizAnswerStore.instance.record(qa.quizId, qa.userAnswer);
+    }
 
     // Optimistik mesajı gerçek değerlerle güncelle — yeni user mesajı EKLENMEZ
     final tempIndex = messages.indexWhere((m) => m.id == tempId);
@@ -788,6 +950,9 @@ class ChatProvider extends ChangeNotifier {
       prompt: data.prompt,
       classLevel: data.classLevel,
       forceDirectChat: data.forceDirectChat ? true : null,
+      markedRegion: data.markedRegion,
+      hintRef: data.hintRef,
+      studentQuestion: data.studentQuestion,
     );
   }
 
@@ -897,6 +1062,9 @@ class ChatProvider extends ChangeNotifier {
   /// PlayerScreen'den donunce cagirilir.
   /// request_complete WS mesaji kacirildiysa, sunucudan kontrol eder.
   Future<void> ensureRequestFinalized(String requestId) async {
+    // Oynatıcıdan dönüldü: bu istek için asılı kalan bekçi zamanlayıcısını ve
+    // retry kaydını (File referansı tutuyor) bırak.
+    _bekciSil(requestId);
     final msgIndex = messages.indexWhere(
       (m) => m.requestId == requestId && m.type == MessageType.ai,
     );
@@ -924,6 +1092,12 @@ class ChatProvider extends ChangeNotifier {
   void clearChat() {
     messages.clear();
     _activeRequests.clear();
+    for (final t in _watchdogs.values) {
+      t.cancel();
+    }
+    _watchdogs.clear();
+    _bekciDusenler.clear();
+    _requestRetry.clear();
     _retryData.clear();
     _currentConversationId = null;
     _conversationMode = null;           // mod kilidi kalkar, global tercih geri gelir
@@ -935,8 +1109,39 @@ class ChatProvider extends ChangeNotifier {
     clearChat();
   }
 
+  /// Çıkış yapıldığında çağrılır: sohbet, uçuştaki istekler ve ESKİ JETONLU
+  /// WebSocket bırakılır.
+  ///
+  /// Önceden çıkış yalnız AuthProvider'ı temizliyordu; ChatProvider ayakta
+  /// kalıyor, önceki kullanıcının mesajları ekranda duruyor ve soket eski
+  /// jetonla bağlı kalmaya devam ediyordu — bir sonraki kullanıcı öncekinin
+  /// sohbetini görebiliyordu.
+  void signOutCleanup() {
+    clearChat();
+    _userId = null;
+    _isGuest = false;
+    _deviceId = null;
+    _displayName = null;
+    _conversationMode = null;
+    // "Kendini tanıt" metni kişisel veridir ve isteklere `studentIntro` olarak
+    // gidiyor; bırakılmazsa sonraki kullanıcının isteklerine eklenir ve
+    // sunucudaki profiline YAZILIR.
+    _studentIntro = '';
+    _messageSubscription?.cancel();
+    _messageSubscription = null;
+    _connectionSubscription?.cancel();
+    _connectionSubscription = null;
+    _vdsService.disconnectWebSocket();
+    isConnected = false;
+    notifyListeners();
+  }
+
   @override
   void dispose() {
+    for (final t in _watchdogs.values) {
+      t.cancel();
+    }
+    _watchdogs.clear();
     _messageSubscription?.cancel();
     _connectionSubscription?.cancel();
     _vdsService.dispose();
@@ -952,6 +1157,14 @@ class _RetryData {
   /// olması gereken quiz cevabını çizim turuna çevirirdi.
   final bool forceDirectChat;
 
+  /// TAKİP TURU ALANLARI. Bunlar korunmazsa işaretli bölge / hint yanıtı
+  /// turlarında "Tekrar Dene" BOŞ bir mesaj gönderir: metin `prompt`'ta değil
+  /// `studentQuestion`'da, bağlam ise `markedRegion`/`hintRef`'te duruyor.
+  final List<int>? markedRegion;
+  final String? hintRef;
+  final String? studentQuestion;
+
   _RetryData({this.imageFile, this.prompt, this.classLevel,
-      this.forceDirectChat = false});
+      this.forceDirectChat = false,
+      this.markedRegion, this.hintRef, this.studentQuestion});
 }

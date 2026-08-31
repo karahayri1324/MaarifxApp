@@ -323,8 +323,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               color: context.textSecondary,
                               height: 1.4,
                             ),
-                            children: [
-                              const TextSpan(
+                            children: const [
+                              TextSpan(
                                 text: 'Gizlilik Politikası',
                                 style: TextStyle(
                                   color: AppTheme.primary,
@@ -332,7 +332,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 ),
                                 recognizer: null,
                               ),
-                              const TextSpan(text: '\'ni okudum, kabul ediyorum.'),
+                              TextSpan(text: '\'ni okudum, kabul ediyorum.'),
                             ],
                           ),
                         ),

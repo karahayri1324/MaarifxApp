@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
+import '../config/log.dart';
 
 /// Audio service for playing synchronized audio with canvas timeline
 class AudioService {
@@ -47,7 +47,7 @@ class AudioService {
 
       _isInitialized = true;
     } catch (e) {
-      debugPrint('[AudioService] Init error: $e');
+      logD('[AudioService] Init error: $e');
     }
   }
 
@@ -56,7 +56,7 @@ class AudioService {
     // Init bitmeden gelen erken play çağrısı sessizce düşmesin — bekle.
     await _initFuture;
     if (!_isInitialized) {
-      debugPrint('[AudioService] Not initialized');
+      logD('[AudioService] Not initialized');
       return;
     }
 
@@ -87,7 +87,7 @@ class AudioService {
 
       await _player.play();
     } catch (e) {
-      debugPrint('[AudioService] Play error: $e');
+      logD('[AudioService] Play error: $e');
       if (!_stateController.isClosed) _stateController.addError(e);
     }
   }
@@ -97,7 +97,7 @@ class AudioService {
     try {
       await _player.pause();
     } catch (e) {
-      debugPrint('[AudioService] Pause error: $e');
+      logD('[AudioService] Pause error: $e');
     }
   }
 
@@ -107,7 +107,7 @@ class AudioService {
       await _player.stop();
       _currentUrl = null;
     } catch (e) {
-      debugPrint('[AudioService] Stop error: $e');
+      logD('[AudioService] Stop error: $e');
     }
   }
 
@@ -116,7 +116,7 @@ class AudioService {
     try {
       await _player.seek(Duration(milliseconds: milliseconds));
     } catch (e) {
-      debugPrint('[AudioService] Seek error: $e');
+      logD('[AudioService] Seek error: $e');
     }
   }
 
@@ -125,7 +125,7 @@ class AudioService {
     try {
       await _player.setSpeed(speed);
     } catch (e) {
-      debugPrint('[AudioService] SetSpeed error: $e');
+      logD('[AudioService] SetSpeed error: $e');
     }
   }
 
@@ -134,7 +134,7 @@ class AudioService {
     try {
       await _player.setVolume(volume.clamp(0.0, 1.0));
     } catch (e) {
-      debugPrint('[AudioService] SetVolume error: $e');
+      logD('[AudioService] SetVolume error: $e');
     }
   }
 

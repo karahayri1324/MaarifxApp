@@ -243,7 +243,6 @@ class ConversationModeLockedException implements Exception {
 // ─── VDS Service ───
 class VdsService {
   String? _authToken;
-  String? _userId;
   WebSocketChannel? _channel;
   bool _isConnected = false;
   bool _isDisposed = false;
@@ -261,9 +260,10 @@ class VdsService {
 
   // ─── Auth ───
 
-  void setAuth(String token, String userId) {
+  /// Jeton, tüm HTTP başlıkları ve WebSocket el sıkışması için burada tutulur.
+  /// Kullanıcı kimliği istemcide saklanmıyor — sunucu her isteği jetondan çözer.
+  void setAuth(String token) {
     _authToken = token;
-    _userId = userId;
   }
 
   Map<String, String> get _headers => {
@@ -789,6 +789,11 @@ class VdsService {
       Future.delayed(const Duration(milliseconds: 500), () {
         if (_channel == channel && !_isConnected && !_isDisposed) {
           _isConnected = true;
+          // Backoff sayacı BURADA da sıfırlanmalı. Sıfırlama yalnız ilk mesaj
+          // geldiğinde yapılıyordu; bağlantı bu iyimser yoldan kurulduğunda
+          // sayaç eski değerinde kalıyor ve birkaç kesintiden sonra yeniden
+          // bağlanma kalıcı olarak 60 sn'ye tırmanıyordu.
+          _reconnectAttempt = 0;
           _connectionController.add(true);
           _startPingTimer();
         }
@@ -799,6 +804,8 @@ class VdsService {
   }
 
   void _handleMessage(dynamic rawMessage) {
+    // Sunucudan gelen HER şey (pong dahil) soketin canlı olduğunun kanıtı.
+    _sonGelen = DateTime.now();
     try {
       final data = jsonDecode(rawMessage as String) as Map<String, dynamic>;
       final typeStr = data['type'] as String? ?? '';
@@ -843,6 +850,7 @@ class VdsService {
   }
 
   void _handleDisconnect() {
+    _sonGelen = null;
     _isConnected = false;
     _connectionController.add(false);
     _stopPingTimer();
@@ -871,7 +879,15 @@ class VdsService {
     return Duration(seconds: seconds);
   }
 
+  /// Sunucudan en son ne zaman bir şey geldi. Ölü soket tespitinin ölçütü.
+  DateTime? _sonGelen;
+
+  /// Ping aralığı 30 sn; bu eşik 2,5 ping demek. Tek bir gecikmiş pong
+  /// sağlıklı bir bağlantıyı koparmasın diye bilerek geniş.
+  static const Duration _oluSoketEsigi = Duration(seconds: 75);
+
   void _startPingTimer() {
+    _sonGelen = DateTime.now();   // sayaç bağlantı anından başlar
     _pingTimer?.cancel();
     _pingTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _sendPing();
@@ -885,10 +901,35 @@ class VdsService {
 
   void _sendPing() {
     if (!_isConnected) return;
+
+    // YARI AÇIK SOKET: mobil ağ değişimi, uyku ya da NAT zaman aşımı sonrası
+    // TCP bağlantısı ne `onDone` ne `onError` üretmeden ölebilir; sink'e yazmak
+    // da hata vermez. Eskiden buna karşı hiçbir kontrol yoktu — ping atılıyor,
+    // pong'un GELİP GELMEDİĞİNE bakılmıyordu; uygulama sonsuza kadar "bağlı"
+    // görünüp tek mesaj alamıyordu. Sunucu `{type:'ping'}` isteğine
+    // `{type:'pong'}` ile cevap veriyor (server.js:1136), bu yüzden uzun
+    // sessizlik = ölü soket demektir.
+    final son = _sonGelen;
+    if (son != null && DateTime.now().difference(son) > _oluSoketEsigi) {
+      try {
+        _channel?.sink.close();
+      } catch (_) {
+        // kapatma hatası önemsiz — zaten ölü sayıyoruz
+      }
+      _channel = null;
+      _handleDisconnect();   // yeniden bağlanma zinciri buradan başlar
+      return;
+    }
+
     try {
       _channel?.sink.add(jsonEncode({'type': 'ping'}));
     } catch (e) {
-      // ignore
+      // Kanalı BIRAK: aksi hâlde ölü kanal `_channel` olarak durmaya devam
+      // eder, sonra gelen onDone/onError stale-guard'ı geçip İKİNCİ bir
+      // `_handleDisconnect` tetikler — backoff sayacı iki kat artar ve
+      // yeniden bağlanma gereksiz yere gecikir.
+      _channel = null;
+      _handleDisconnect();
     }
   }
 

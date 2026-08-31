@@ -14,7 +14,7 @@ class AIMessageWidget extends StatelessWidget {
   final VoidCallback? onRetry;
 
   /// ```maarifx-quiz``` kartından cevap gönderilince çağrılır (fence metniyle).
-  final Future<void> Function(String fence)? onQuizAnswer;
+  final Future<bool> Function(String fence)? onQuizAnswer;
 
   const AIMessageWidget({
     super.key,
@@ -236,13 +236,13 @@ class AIMessageWidget extends StatelessWidget {
       h4: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: context.textPrimary),
       h5: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: context.textPrimary),
       h6: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: context.textSecondary),
-      a: TextStyle(color: AppTheme.primary, decoration: TextDecoration.underline),
+      a: const TextStyle(color: AppTheme.primary, decoration: TextDecoration.underline),
       listBullet: TextStyle(fontSize: 14, color: context.textPrimary),
       blockquote: TextStyle(fontSize: 14, height: 1.5, color: context.textSecondary),
       blockquoteDecoration: BoxDecoration(
         color: context.bgTertiary,
         borderRadius: BorderRadius.circular(6),
-        border: Border(left: BorderSide(color: AppTheme.primary, width: 3)),
+        border: const Border(left: BorderSide(color: AppTheme.primary, width: 3)),
       ),
       blockquotePadding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
       tableBorder: TableBorder.all(color: context.borderColor, width: 1),

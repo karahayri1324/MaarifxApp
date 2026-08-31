@@ -1,15 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import '../../config/app_config.dart';
 import '../../config/theme.dart';
 import '../../services/audio_service.dart';
+import '../../config/log.dart';
 
 /// PlayerScreen'den dönen takip-turu verisi.
 /// - Ekran görüntüsüyle soru (legacy): imageFile + text.
@@ -64,7 +66,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // Playback state
   bool _isPlaying = false;
   bool _hasEnded = false;
-  double _speed = 1.0;
+  // Oynatma hizi UI'i yok; ses her zaman 1.0x. Alan, ileride hiz kontrolu
+  // eklenirse tek dokunus noktasi olsun diye duruyor.
+  static const double _speed = 1.0;
   String? _errorMessage;
 
   @override
@@ -91,11 +95,42 @@ class _PlayerScreenState extends State<PlayerScreen> {
         ? AppConfig.canvasLiveUrl(widget.requestId, widget.token, widget.imageUrl)
         : AppConfig.canvasReplayUrl(widget.requestId, widget.token);
 
+    // ─── DEBUG KİLİDİ ───
+    // WebView'in UZAKTAN İNCELENMESİ kapalı. Açık kalırsa USB'li bir cihazdan
+    // Android'de chrome://inspect, iOS'ta Safari Web Inspector ile canvas.html'in
+    // DOM'u, JS bağlamı, ağ trafiği ve URL'sindeki OTURUM JETONU okunabilir.
+    // Android'de release derlemesi zaten debuggable değil, iOS 16.4+ ise
+    // varsayılanı açık; ikisini de şansa bırakmadan açıkça kapatıyoruz.
+    // Yalnız RELEASE'te kapatılır: geliştirme sırasında canvas.html'i
+    // incelemek gerekiyor, kullanıcının elindeki APK'da ise asla.
+    // NOT: bu API bir Future döndürür — senkron try/catch onu YAKALAMAZ
+    // (ilk sürümdeki try/catch ölü koddu); hata `catchError` ile susturuluyor.
+    if (!kDebugMode && Platform.isAndroid) {
+      unawaited(
+        AndroidWebViewController.enableDebugging(false).catchError((_) {}),
+      );
+    }
+
     _webViewController = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.black)
       ..addJavaScriptChannel('FlutterChannel', onMessageReceived: _onJsMessage)
       ..setNavigationDelegate(NavigationDelegate(
+        // GEZİNME BEYAZ LİSTESİ: bu WebView hem oturum jetonunu hem de
+        // FlutterChannel köprüsünü taşıyor. Sayfa (ya da içine sızan bir
+        // içerik) başka bir adrese giderse köprü ve jeton yabancı bir sayfaya
+        // açılmış olur. Yalnız kendi sunucumuza gezinmeye izin var; harici
+        // bağlantılar WebView içinde AÇILMAZ.
+        onNavigationRequest: (request) {
+          // YALNIZ ANA ÇERÇEVE kısıtlanır. Köprü ve jeton ana çerçeveye
+          // bağlıdır; alt kaynaklar (soru görseli, ses parçaları, css) bazı
+          // WebView sürümlerinde bu geri çağrıya düşüyor ve onları engellemek
+          // oynatıcıyı sessizce bozardı — güvenlik kazancı da yok.
+          if (!request.isMainFrame) return NavigationDecision.navigate;
+          return _adresGuvenli(request.url)
+              ? NavigationDecision.navigate
+              : NavigationDecision.prevent;
+        },
         onPageFinished: (String finishedUrl) {
           // ARA NAVIGASYON KORUMASI: bazi WebView surumleri gercek yuklemeden
           // once about:blank icin de onPageFinished uretir. Erken _pageLoaded=true
@@ -159,6 +194,30 @@ class _PlayerScreenState extends State<PlayerScreen> {
       // yalnız yeni APK'larda ek güvence.)
       platform.setTextZoom(100);
     }
+    // iOS (WKWebView): Safari Web Inspector'a görünmesin — jeton ve köprü
+    // taşıyan bir sayfayı incelenebilir bırakmıyoruz. `isInspectable` yalnız
+    // iOS 16.4+ var; eski sürümlerde kanal hatası fırlatır ve beklenmediği
+    // için uygulamayı yakalanmamış async hatayla düşürürdü.
+    if (!kDebugMode && platform is WebKitWebViewController) {
+      unawaited(platform.setInspectable(false).catchError((_) {}));
+    }
+  }
+
+  /// Oynatıcı WebView'inin gitmesine izin verilen adres mi?
+  ///
+  /// Yalnız kendi API kökümüz. Boş adres ve `about:` (bazı WebView sürümleri
+  /// gerçek yüklemeden önce `about:blank` için de geri çağrı üretir) serbest;
+  /// onların dışında her şey (harici bağlantı, reklam, yönlendirme) engellenir —
+  /// FlutterChannel köprüsü ve URL'deki oturum jetonu yabancı bir sayfaya
+  /// asla taşınmaz.
+  bool _adresGuvenli(String url) {
+    if (url.isEmpty || url.startsWith('about:')) return true;
+    final hedef = Uri.tryParse(url);
+    final kok = Uri.tryParse(AppConfig.apiUrl);
+    if (hedef == null || kok == null) return false;
+    return hedef.scheme == kok.scheme &&
+        hedef.host == kok.host &&
+        hedef.port == kok.port;
   }
 
   // ─── JS Messages ───────────────────────────────────
@@ -204,7 +263,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           if (mounted) Navigator.of(context).pop();
       }
     } catch (e) {
-      debugPrint('[Player] JS parse error: $e');
+      logD('[Player] JS parse error: $e');
     }
   }
 
@@ -232,7 +291,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         );
       }
     } catch (e) {
-      debugPrint('[Player] Annotation save error: $e');
+      logD('[Player] Annotation save error: $e');
     }
   }
 

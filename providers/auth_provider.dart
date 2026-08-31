@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../services/auth_service.dart';
 import '../models/user_model.dart';
+import '../config/log.dart';
 
 enum AuthStatus { unknown, authenticated, unauthenticated }
 
@@ -44,7 +45,7 @@ class AuthProvider extends ChangeNotifier {
       // alinamasa bile cihazdaki secim bilinsin, kullaniciya tekrar sorulmasin).
       _guestClassLevel = await _authService.getGuestClassLevel();
     } catch (e) {
-      debugPrint('[AuthProvider] Misafir sinif seviyesi okunamadi: $e');
+      logD('[AuthProvider] Misafir sinif seviyesi okunamadi: $e');
     }
     try {
       // Oncelik: normal kullanici auto-login
@@ -83,7 +84,7 @@ class AuthProvider extends ChangeNotifier {
         _status = AuthStatus.unauthenticated;
       }
     } catch (e) {
-      debugPrint('[AuthProvider] Auto-login error: $e');
+      logD('[AuthProvider] Auto-login error: $e');
       _status = AuthStatus.unauthenticated;
     }
     notifyListeners();
@@ -185,7 +186,7 @@ class AuthProvider extends ChangeNotifier {
     try {
       await _authService.saveGuestClassLevel(classLevel);
     } catch (e) {
-      debugPrint('[AuthProvider] Misafir sinif seviyesi yazilamadi: $e');
+      logD('[AuthProvider] Misafir sinif seviyesi yazilamadi: $e');
     }
   }
 

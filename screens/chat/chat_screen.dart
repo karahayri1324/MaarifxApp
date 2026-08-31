@@ -17,6 +17,7 @@ import '../../widgets/drawer/nav_drawer.dart';
 import '../auth/login_screen.dart';
 import '../auth/register_screen.dart';
 import '../player/player_screen.dart';
+import '../../services/vds_service.dart' show SendMessageResult;
 import '../settings/privacy_policy_screen.dart';
 import '../../widgets/common/server_notice_dialog.dart';
 import '../../widgets/common/class_level_sheet.dart';
@@ -342,6 +343,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
 
     // Check server
+    if (!mounted) return;   // yukaridaki await'lerden sonra ekran kapanmis olabilir
     if (!chatProvider.serverReachable) {
       ServerErrorDialog.show(context);
       return;
@@ -356,20 +358,32 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     if (result == null || !mounted) return;
 
-    // Oynatıcıya (canvas.html) YALNIZ istek gerçekten çizimli gittiyse geçilir.
-    // Karar gönderimden ÖNCE toggle'a bakılarak verilemez: çizim açıkken
-    // fotoğrafsız gönderilen mesaj provider'da çizimsize düşürülüyor, o hâlde
-    // toggle'a bakan eski kod düz metin mesajında da canvas'ı açıyordu.
-    if (!result.drawOnImageUsed) {
-      return;
-    }
+    await _openPlayerForResult(result);
+  }
 
-    // Cizimli mod: canli player ekranina git
-    final token = authProvider.token ?? '';
-    String? imageUrl;
-    if (result.imagePath != null) {
-      imageUrl = chatProvider.vdsService.getImageUrl(result.imagePath!);
-    }
+  /// Çizimli bir istek sonrası oynatıcıyı (canvas.html) açar, dönüşte isteği
+  /// finalize eder ve takip turunu bağlar.
+  ///
+  /// CANLI oynatıcıya YALNIZ buradan geçilir — gönderim yollarının tek giriş
+  /// noktası (ilk mesaj, takip turu, "Tekrar Dene"). Daha önce bu blok üç yerde
+  /// kopyalanmıştı ve `drawOnImageUsed` koruması retry yolunda unutulduğu için
+  /// çizimsize düşen (fotoğrafsız) mesajda da canvas açılıyordu. Yeni bir
+  /// gönderim yolu eklenirken kontrol burada, tek yerde durur.
+  ///
+  /// (Ayrı yol: `onReplay` — tamamlanmış bir çözümün TEKRARI. O `isLive:false`
+  /// ile doğrudan push ediyor ve zaten `hasSessionData` ile kapılı, yani
+  /// çizimsiz mesajda buton hiç görünmüyor.)
+  Future<void> _openPlayerForResult(SendMessageResult result) async {
+    // İstek gerçekten çizimli gitmediyse oynatıcı AÇILMAZ; cevap sohbette metin
+    // olarak akar. Karar toggle'a değil, GÖNDERİLEN moda bakar: çizim açıkken
+    // fotoğrafsız gönderilen mesaj provider'da çizimsize düşürülüyor.
+    if (!result.drawOnImageUsed || !mounted) return;
+
+    final chatProvider = context.read<ChatProvider>();
+    final token = context.read<AuthProvider>().token ?? '';
+    final imageUrl = result.imagePath != null
+        ? chatProvider.vdsService.getImageUrl(result.imagePath!)
+        : null;
 
     final annotationResult = await Navigator.of(context).push<AnnotationResult?>(
       MaterialPageRoute(
@@ -384,20 +398,21 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
 
     // Player'dan donunce mesajin tamamlandigini garantile
-    if (mounted) {
-      await chatProvider.ensureRequestFinalized(result.requestId);
-    }
+    if (!mounted) return;
+    await chatProvider.ensureRequestFinalized(result.requestId);
 
-    // Kullanici annotation gonderdi ise devam et
+    // Kullanici annotation gonderdi ise takip turuna gec
     if (annotationResult != null && mounted) {
-      _handleAnnotationResult(annotationResult);
+      await _handleAnnotationResult(annotationResult);
     }
   }
 
   /// ```maarifx-quiz``` kartından gelen cevap: normal bir metin turu olarak
   /// gönderilir (QUIZ_ANSWER.md — cevap tool değil, USER mesajıdır).
   /// Çizimsiz mod olduğu için PlayerScreen'e gidilmez, sohbette kalınır.
-  Future<void> _handleQuizAnswer(String fence) async {
+  /// Dönen: cevap gerçekten gönderildi mi? Kart yalnız `true` ile kilitlenir —
+  /// gönderilemeyen bir cevap öğrenciyi kilitli kartla baş başa bırakmasın.
+  Future<bool> _handleQuizAnswer(String fence) async {
     final chatProvider = context.read<ChatProvider>();
     final authProvider = context.read<AuthProvider>();
 
@@ -409,19 +424,21 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           behavior: SnackBarBehavior.floating,
         ));
       }
-      return;
+      return false;
     }
+    if (!mounted) return false;
     if (!chatProvider.serverReachable) {
-      if (mounted) ServerErrorDialog.show(context);
-      return;
+      ServerErrorDialog.show(context);
+      return false;
     }
 
-    await chatProvider.sendMessage(
+    final result = await chatProvider.sendMessage(
       prompt: fence,
       classLevel: _sinifSeviyesi(authProvider),
       forceDirectChat: true,   // çizim açık olsa bile oynatıcıya düşme, sohbette kal
     );
     _scrollToBottom(force: true);
+    return result != null;
   }
 
   Future<void> _handleAnnotationResult(AnnotationResult annotation) async {
@@ -456,33 +473,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     // Takip turu da yalnız gerçekten çizimli gittiyse oynatıcıya döner
     // (aynı tek kaynak: gönderilen mod).
-    if (result != null && result.drawOnImageUsed && mounted) {
-      final token = authProvider.token ?? '';
-      String? imageUrl;
-      if (result.imagePath != null) {
-        imageUrl = chatProvider.vdsService.getImageUrl(result.imagePath!);
-      }
+    if (result == null || !mounted) return;
 
-      final nextAnnotation = await Navigator.of(context).push<AnnotationResult?>(
-        MaterialPageRoute(
-          builder: (_) => PlayerScreen(
-            requestId: result.requestId,
-            token: token,
-            isLive: true,
-            imageUrl: imageUrl,
-            title: 'Çözüm',
-          ),
-        ),
-      );
-
-      if (mounted) {
-        await chatProvider.ensureRequestFinalized(result.requestId);
-      }
-
-      if (nextAnnotation != null && mounted) {
-        _handleAnnotationResult(nextAnnotation);
-      }
-    }
+    await _openPlayerForResult(result);
   }
 
   @override
@@ -865,30 +858,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                       ? () async {
                           final result = await chatProvider.retryMessage(message.id);
                           _scrollToBottom(force: true);
+                          // Tekrar denenen istek de çizimsize düşmüş olabilir
+                          // (fotoğrafsız metin / quiz cevabı) — oynatıcı kararı
+                          // _openPlayerForResult içindeki tek koruma verir.
                           if (result != null && mounted) {
-                            final authProvider = context.read<AuthProvider>();
-                            final token = authProvider.token ?? '';
-                            String? imageUrl;
-                            if (result.imagePath != null) {
-                              imageUrl = chatProvider.vdsService.getImageUrl(result.imagePath!);
-                            }
-                            final annotationResult = await Navigator.of(context).push<AnnotationResult?>(
-                              MaterialPageRoute(
-                                builder: (_) => PlayerScreen(
-                                  requestId: result.requestId,
-                                  token: token,
-                                  title: 'Çözüm',
-                                  imageUrl: imageUrl,
-                                  isLive: true,
-                                ),
-                              ),
-                            );
-                            if (mounted) {
-                              await chatProvider.ensureRequestFinalized(result.requestId);
-                            }
-                            if (annotationResult != null && mounted) {
-                              _handleAnnotationResult(annotationResult);
-                            }
+                            await _openPlayerForResult(result);
                           }
                         }
                       : null,

@@ -151,7 +151,7 @@ class NavDrawer extends StatelessWidget {
                           width: 42,
                           height: 42,
                           decoration: BoxDecoration(
-                            gradient: LinearGradient(
+                            gradient: const LinearGradient(
                               colors: [AppTheme.primary, AppTheme.primaryDark],
                               begin: Alignment.topLeft,
                               end: Alignment.bottomRight,
@@ -277,6 +277,9 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
 
     final chatProvider = context.read<ChatProvider>();
     final prefs = await SharedPreferences.getInstance();
+    // GERİYE UYUM: eski sürümlerde "Sil" yalnız cihazda gizliyordu. O kayıtlar
+    // sunucuda hâlâ duruyor; kullanıcının beklentisini bozmamak için gizli
+    // kalmaya devam ediyorlar. Yeni silmeler sunucudan gerçekten siliniyor.
     final hiddenList = prefs.getStringList(_hiddenKey) ?? [];
     final result = await chatProvider.getConversations(limit: _pageSize, offset: 0);
     if (mounted) {
@@ -309,18 +312,64 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
     }
   }
 
-  Future<void> _hideConversation(String conversationId) async {
+  /// Sohbeti GERÇEKTEN siler.
+  ///
+  /// Eskiden burası yalnızca id'yi cihazdaki `hidden_conversation_ids`
+  /// listesine yazıyordu: sohbet sunucuda olduğu gibi duruyor, kullanıcı
+  /// yeni bir cihaza girdiğinde "sildiği" her şey geri geliyordu — ve
+  /// öğrenci verisi hiçbir zaman silinmiyordu. `deleteConversation` API'si
+  /// yazılmış ama hiç çağrılmamıştı. Artık önce onay alınır, sonra sunucudan
+  /// silinir; silme başarısızsa liste DEĞİŞMEZ ve kullanıcıya söylenir
+  /// (sessizce "silindi" gösterip aslında saklamak en kötüsüydü).
+  Future<void> _deleteConversation(String conversationId) async {
+    final onay = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sohbet silinsin mi?'),
+        content: const Text(
+          'Bu sohbetteki tüm mesajlar, fotoğraflar ve çözümler kalıcı olarak '
+          'silinir. Bu işlem geri alınamaz.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Vazgeç'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
+            child: const Text('Sil'),
+          ),
+        ],
+      ),
+    );
+    if (onay != true || !mounted) return;
+
     final chatProvider = context.read<ChatProvider>();
+    final silindi = await chatProvider.vdsService.deleteConversation(conversationId);
+    if (!mounted) return;
+
+    if (!silindi) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Sohbet silinemedi. Bağlantını kontrol edip tekrar dene.'),
+        backgroundColor: AppTheme.danger,
+        behavior: SnackBarBehavior.floating,
+      ));
+      return;
+    }
+
     if (chatProvider.currentConversationId == conversationId) {
       chatProvider.startNewChat();
     }
-
     setState(() {
-      _hiddenIds.add(conversationId);
+      _conversations.removeWhere((c) => c.id == conversationId);
+      if (_total > 0) _total--;
+      _hasMore = _conversations.length < _total;
     });
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_hiddenKey, _hiddenIds.toList());
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Sohbet silindi'),
+      behavior: SnackBarBehavior.floating,
+    ));
   }
 
   void _showDeleteSheet(BuildContext context, ConversationSummary conv) {
@@ -368,7 +417,7 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
                 ),
                 onTap: () {
                   Navigator.pop(ctx);
-                  _hideConversation(conv.id);
+                  _deleteConversation(conv.id);
                 },
               ),
             ],

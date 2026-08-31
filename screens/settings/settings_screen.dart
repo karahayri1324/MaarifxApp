@@ -189,6 +189,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) {
         if (result['success'] == true) {
           final authProvider = context.read<AuthProvider>();
+          // Çıkış yoluyla aynı temizlik: silinen hesabın sohbeti, uçuştaki
+          // istekleri ve eski jetonlu WebSocket'i bırakılır.
+          context.read<ChatProvider>().signOutCleanup();
           await authProvider.signOut();
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -237,6 +240,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (confirm == true && mounted) {
       final authProvider = context.read<AuthProvider>();
+      // Sohbet durumu ÖNCE bırakılır: mesajlar, uçuştaki istekler ve eski
+      // jetonlu WebSocket. Yoksa yeni ChatScreen açılana kadar önceki
+      // kullanıcının sohbeti ekranda kalıyor ve soket eski jetonla bağlı
+      // olmaya devam ediyordu.
+      context.read<ChatProvider>().signOutCleanup();
       await authProvider.signOut();
       if (mounted) {
         Navigator.of(context).pushAndRemoveUntil(
@@ -781,7 +789,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
     controller.dispose();
-    if (sonuc == null || !mounted) return;
+    // `context` bu metoda PARAMETRE olarak geliyor; State'in `mounted`'i onun
+    // icin dogru koruma degil. BuildContext'in kendi canliligina bakiyoruz.
+    if (sonuc == null || !context.mounted) return;
 
     final ad = sonuc.trim().replaceAll(RegExp(r'\s+'), ' ');
     if (ad.length < 2 || ad.length > 40) {
@@ -796,7 +806,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final basarili = await context.read<ChatProvider>().vdsService
         .updateProfile(displayName: ad);
-    if (!mounted) return;
+    if (!context.mounted) return;
     if (basarili) {
       if (auth.user != null) auth.updateUser(auth.user!.copyWith(displayName: ad));
       // ChatProvider kendi kopyasını tutuyor (isteğe `studentName` olarak gider)

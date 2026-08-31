@@ -1,9 +1,9 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 import '../models/user_model.dart';
+import '../config/log.dart';
 
 class AuthResult {
   final UserModel user;
@@ -103,14 +103,25 @@ class AuthService {
         );
         await _saveAuth(token, user);
         return AuthResult(user: user, token: token);
-      } else {
-        // Token gecersiz, temizle
+      } else if (response.statusCode == 401 || response.statusCode == 403) {
+        // Jeton GERÇEKTEN reddedildi (süresi doldu / iptal edildi) → temizle.
         await _clearAuth();
+        return null;
+      } else {
+        // 5xx / 429 / 502: sunucu geçici olarak sorunlu, jeton hâlâ geçerli
+        // olabilir. Eskiden buradaki koşulsuz `_clearAuth()` yüzünden tek bir
+        // bakım penceresi ya da 502 tüm kullanıcıları KALICI olarak dışarı
+        // atıyordu. Ağ hatasıyla aynı muamele: kayıtlı kullanıcıyla devam.
+        logD('[AuthService] /me gecici hata ${response.statusCode} — oturum korunuyor');
+        final savedUser = await _getSavedUser();
+        if (savedUser != null) {
+          return AuthResult(user: savedUser, token: token);
+        }
         return null;
       }
     } catch (e) {
       // Network hatasi - offline fallback: lokal user bilgisini kullan
-      debugPrint('[AuthService] Auto-login network error, trying offline: $e');
+      logD('[AuthService] Auto-login network error, trying offline: $e');
       final savedUser = await _getSavedUser();
       if (savedUser != null) {
         return AuthResult(user: savedUser, token: token);
