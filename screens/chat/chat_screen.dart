@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../../config/theme.dart';
+import '../../widgets/common/ui_bits.dart';
 import '../../models/chat_message.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
@@ -456,6 +458,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       backgroundColor: context.bgSecondary,
       appBar: _buildAppBar(context, isGuest),
       drawer: isGuest ? null : const NavDrawer(),
+      // Çekmece hissiyatı: varsayılan kenar şeridi ~20 px ve sürükleme parmak
+      // KALKINCA başlıyordu; açmak için ekranın en kenarını bulmak gerekiyordu.
+      // Şerit genişletildi ve sürükleme parmak DEĞİNCE başlıyor → anında takip.
+      drawerEdgeDragWidth: 72,
+      drawerDragStartBehavior: DragStartBehavior.down,
+      drawerScrimColor: Colors.black.withOpacity(0.32),
       body: Consumer<ChatProvider>(
         builder: (context, chatProvider, child) {
           // Show server error dialog if needed
@@ -602,21 +610,20 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     return AppBar(
       backgroundColor: context.bgSecondary,
       elevation: 0,
+      toolbarHeight: 64,
+      titleSpacing: 4,
       leading: isGuest
           ? null // Misafirde menü yok
           : IconButton(
-              icon: Icon(Icons.menu_rounded, color: context.textPrimary),
+              icon: Icon(Icons.menu_rounded, size: 26, color: context.textPrimary),
+              iconSize: 26,
+              splashRadius: 24,
+              tooltip: 'Sohbetler',
               onPressed: () => _scaffoldKey.currentState?.openDrawer(),
             ),
       automaticallyImplyLeading: false,
       // Kutulu logo ve model rozeti yerine yazı-logo. Model composer'dan seçilir.
-      title: Image.asset(
-        context.wordmarkAsset,
-        height: 24,
-        fit: BoxFit.contain,
-        filterQuality: FilterQuality.medium,
-        semanticLabel: 'MaariFx',
-      ),
+      title: const MaarifxYazi(height: 27),
       actions: isGuest
           ? [
               TextButton(

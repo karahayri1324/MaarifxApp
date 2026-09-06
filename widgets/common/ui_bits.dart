@@ -1,6 +1,80 @@
 import 'package:flutter/material.dart';
 import '../../config/theme.dart';
 
+/// Yazı-logo — VARLIK BULUNAMAZSA BİLE bir şey çizer.
+///
+/// Neden: uygulama kaynağı (lib/) `assets/` olmadan da derlenebiliyor
+/// (ör. yalnız kaynak dosyaların taşındığı depolardan). O durumda
+/// `Image.asset` sessizce boş bir kutu bırakıyor ve logo "yok" oluyordu.
+/// Sıra: temaya uygun PNG → diğer PNG (temaya göre renklendirilmiş silüet)
+/// → yazıyla kurulmuş logo. Hiçbir hâlde boşluk kalmaz.
+class MaarifxYazi extends StatelessWidget {
+  final double height;
+  final double? width;
+  const MaarifxYazi({super.key, this.height = 24, this.width});
+
+  @override
+  Widget build(BuildContext context) {
+    final koyu = context.isDarkMode;
+    final asil = koyu
+        ? 'assets/images/MaarifxyaziKoyu.png'
+        : 'assets/images/Maarifxyazi.png';
+    final yedek = koyu
+        ? 'assets/images/Maarifxyazi.png'
+        : 'assets/images/MaarifxyaziKoyu.png';
+
+    return Image.asset(
+      asil,
+      height: width == null ? height : null,
+      width: width,
+      fit: BoxFit.contain,
+      filterQuality: FilterQuality.medium,
+      semanticLabel: 'MaariFx',
+      // 1. yedek: diğer temanın dosyası — okunur kalsın diye tek renge boyanır.
+      errorBuilder: (context, _, __) => Image.asset(
+        yedek,
+        height: width == null ? height : null,
+        width: width,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.medium,
+        semanticLabel: 'MaariFx',
+        color: context.textPrimary,
+        colorBlendMode: BlendMode.srcIn,
+        // 2. yedek: hiç varlık yok → yazıyla kur.
+        errorBuilder: (context, _, __) => _YaziIleLogo(height: height),
+      ),
+    );
+  }
+}
+
+class _YaziIleLogo extends StatelessWidget {
+  final double height;
+  const _YaziIleLogo({required this.height});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      children: [
+        Text(
+          'Maari',
+          style: TextStyle(
+            fontFamily: AppTheme.fontSans,
+            fontSize: height * 0.78,
+            fontWeight: FontWeight.w600,
+            height: 1,
+            letterSpacing: -0.5,
+            color: context.textPrimary,
+          ),
+        ),
+        FxIsareti(size: height * 0.78),
+      ],
+    );
+  }
+}
+
 /// Yazı-logonun mavi parçası: AI cevabının başındaki küçük işaret.
 class FxIsareti extends StatelessWidget {
   final double size;

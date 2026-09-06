@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../config/theme.dart';
+import '../widgets/common/ui_bits.dart';
 import '../providers/auth_provider.dart';
 import 'chat/chat_screen.dart';
 
@@ -111,12 +112,7 @@ class _SplashScreenState extends State<SplashScreen>
                   ),
                 );
               },
-              child: Image.asset(
-                context.wordmarkAsset,
-                width: 190,
-                fit: BoxFit.contain,
-                filterQuality: FilterQuality.medium,
-              ),
+              child: const MaarifxYazi(width: 190),
             ),
           ),
           Positioned(
@@ -133,6 +129,7 @@ class _SplashScreenState extends State<SplashScreen>
                     width: 18,
                     height: 18,
                     fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
                   ),
                   const SizedBox(width: 7),
                   Text(

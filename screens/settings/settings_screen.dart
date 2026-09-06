@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../config/theme.dart';
+import '../../widgets/common/class_level_sheet.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/theme_provider.dart';
@@ -288,7 +289,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _satir(
                     context,
                     baslik: 'Sınıf',
-                    trailing: _classDropdown(context, user),
+                    deger: _sinifEtiketi(user.classLevel),
+                    onTap: () => _sinifSec(context, user),
                   ),
                 ],
                 _satir(
@@ -316,6 +318,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       trailing: Switch(
                         value: themeProvider.isDarkMode,
                         onChanged: (_) => themeProvider.toggleTheme(),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                       onTap: () => themeProvider.toggleTheme(),
                     );
@@ -328,7 +331,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _satir(
                   context,
                   baslik: 'Samimiyet',
-                  trailing: _samimiyetDropdown(context, chatProvider),
+                  deger: _samimiyetEtiketi(chatProvider.samimiyet),
+                  onTap: () => _samimiyetSec(context, chatProvider),
                 ),
                 _satir(
                   context,
@@ -443,6 +447,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   /// Satır: solda başlık, sağda değer ya da kontrol. İkon ve alt yazı yok.
+  /// Ayar satırı — SİMETRİ KURALI:
+  /// başlık solda, değer sağa yaslı, en sağda SABİT GENİŞLİKTE bir işaret yuvası.
+  /// Yuva satırda ok/anahtar olmasa bile ayrılır; böylece bütün değerler
+  /// (Ad, Sınıf, Şifre…) aynı dikey hatta biter. Eskiden ok yalnız tıklanabilir
+  /// satırlarda çiziliyordu ve değerler satırdan satıra kayıyordu.
   Widget _satir(
     BuildContext context, {
     required String baslik,
@@ -452,13 +461,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     bool tehlike = false,
     bool okGoster = true,
   }) {
+    const yuva = 22.0;   // ok/işaret yuvası — her satırda aynı
+    final Widget sagUc = trailing ??
+        SizedBox(
+          width: yuva,
+          child: (onTap != null && okGoster)
+              ? Icon(Icons.chevron_right_rounded, size: 18, color: context.textMuted)
+              : null,
+        );
     final icerik = Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      padding: const EdgeInsets.fromLTRB(14, 0, 12, 0),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 46),
+        constraints: const BoxConstraints(minHeight: 48),
         child: Row(
           children: [
             Expanded(
+              flex: 5,
               child: Text(
                 baslik,
                 style: TextStyle(
@@ -468,7 +486,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             if (deger != null)
-              Flexible(
+              Expanded(
+                flex: 4,
                 child: Text(
                   deger,
                   maxLines: 1,
@@ -477,13 +496,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   style: TextStyle(fontSize: 13.5, color: context.textSecondary),
                 ),
               ),
-            if (trailing != null) ...[
-              const SizedBox(width: 8),
-              trailing,
-            ] else if (onTap != null && okGoster) ...[
-              const SizedBox(width: 6),
-              Icon(Icons.chevron_right_rounded, size: 18, color: context.textMuted),
-            ],
+            const SizedBox(width: 8),
+            sagUc,
           ],
         ),
       ),
@@ -499,57 +513,79 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // Açılır listeler
   // ─────────────────────────────────────────────────────
 
-  Widget _classDropdown(BuildContext context, UserModel user) {
-    // Eski 'TYT'/'AYT' hesapları → 'TYT/AYT'e normalize et (aksi halde value item'la
-    // eşleşmez, DropdownButton assert atar). 7/11 gibi kaldırılan değerler → null (hint).
-    const validLevels = ['8', '9', '10', 'TYT/AYT'];
-    String? cl = user.classLevel;
-    if (cl == 'TYT' || cl == 'AYT') cl = 'TYT/AYT';
-    if (cl != null && !validLevels.contains(cl)) cl = null;
-    return DropdownButton<String>(
-      value: cl,
-      underline: const SizedBox(),
-      isDense: true,
-      borderRadius: BorderRadius.circular(10),
-      dropdownColor: context.bgPrimary,
-      style: TextStyle(fontSize: 13.5, color: context.textSecondary, fontFamily: AppTheme.fontSans),
-      icon: Icon(Icons.keyboard_arrow_down_rounded, size: 17, color: context.textMuted),
-      items: const [
-        DropdownMenuItem(value: '8', child: Text('8. sınıf')),
-        DropdownMenuItem(value: '9', child: Text('9. sınıf')),
-        DropdownMenuItem(value: '10', child: Text('10. sınıf')),
-        DropdownMenuItem(value: 'TYT/AYT', child: Text('TYT/AYT')),
-      ],
-      onChanged: _updateClassLevel,
-      hint: Text('Seç', style: TextStyle(color: context.textMuted)),
-    );
+  String _sinifEtiketi(String? deger) {
+    final d = normalizeSinifSeviyesi(deger);
+    if (d == null) return 'Seç';
+    for (final s in kSinifSeviyeleri) {
+      if (s.deger == d) return s.etiket;
+    }
+    return d;
   }
 
-  Widget _samimiyetDropdown(BuildContext context, ChatProvider chatProvider) {
-    // "Çok samimi" UZAKTAN kapatılabilir (/api/app-config → samimiyet4Enabled;
-    // okul veya kullanıcı bazında). Kapalıysa seçenek LİSTEDE HİÇ GÖRÜNMEZ.
-    // Sunucu ayrıca istek anında da reddediyor — bu yalnız arayüz katmanı.
-    final dortAcik = chatProvider.samimiyet4Enabled;
-    final secili = chatProvider.samimiyet.clamp(1, dortAcik ? 4 : 3);
-    return DropdownButton<int>(
-      value: secili,
-      underline: const SizedBox(),
-      isDense: true,
-      borderRadius: BorderRadius.circular(10),
-      dropdownColor: context.bgPrimary,
-      style: TextStyle(fontSize: 13.5, color: context.textSecondary, fontFamily: AppTheme.fontSans),
-      icon: Icon(Icons.keyboard_arrow_down_rounded, size: 17, color: context.textMuted),
-      items: [
-        const DropdownMenuItem(value: 1, child: Text('Resmî')),
-        const DropdownMenuItem(value: 2, child: Text('Dengeli')),
-        const DropdownMenuItem(value: 3, child: Text('Samimi')),
-        if (dortAcik) const DropdownMenuItem(value: 4, child: Text('Çok samimi')),
-      ],
-      onChanged: (v) {
-        if (v != null) chatProvider.setSamimiyet(v);
-      },
+  Future<void> _sinifSec(BuildContext context, UserModel user) async {
+    final secim = await showSinifSeviyesiSheet(
+      context,
+      mevcut: normalizeSinifSeviyesi(user.classLevel),
     );
+    if (secim != null) await _updateClassLevel(secim);
   }
+
+  static const List<String> _samimiyetAdlari = [
+    'Resmî', 'Dengeli', 'Samimi', 'Çok samimi',
+  ];
+
+  String _samimiyetEtiketi(int seviye) =>
+      _samimiyetAdlari[(seviye.clamp(1, 4)) - 1];
+
+  Future<void> _samimiyetSec(BuildContext context, ChatProvider chatProvider) async {
+    // "Çok samimi" UZAKTAN kapatılabilir (/api/app-config → samimiyet4Enabled);
+    // kapalıysa listede HİÇ görünmez. Sunucu istek anında da reddeder.
+    final adet = chatProvider.samimiyet4Enabled ? 4 : 3;
+    final secili = chatProvider.samimiyet.clamp(1, adet);
+    final secim = await showModalBottomSheet<int>(
+      context: context,
+      backgroundColor: context.bgPrimary,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppTheme.radiusXl)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SheetTutamac(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
+              child: Text('Samimiyet', style: ctx.eyebrow),
+            ),
+            for (var i = 1; i <= adet; i++)
+              InkWell(
+                onTap: () => Navigator.of(ctx).pop(i),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _samimiyetAdlari[i - 1],
+                          style: TextStyle(fontSize: 15, color: ctx.textPrimary),
+                        ),
+                      ),
+                      if (i == secili)
+                        Icon(Icons.check_rounded, size: 19, color: ctx.blue),
+                    ],
+                  ),
+                ),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (secim != null) await chatProvider.setSamimiyet(secim);
+  }
+
+
 
   // ─────────────────────────────────────────────────────
   // Kullanıcı adı

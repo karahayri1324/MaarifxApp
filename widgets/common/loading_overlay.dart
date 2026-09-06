@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../config/theme.dart';
+import 'ui_bits.dart';
 
 class LoadingOverlay extends StatefulWidget {
   final VoidCallback? onCancel;
@@ -49,12 +50,7 @@ class _LoadingOverlayState extends State<LoadingOverlay>
             children: [
               FadeTransition(
                 opacity: Tween<double>(begin: 0.55, end: 1.0).animate(_controller),
-                child: Image.asset(
-                  context.wordmarkAsset,
-                  width: 120,
-                  fit: BoxFit.contain,
-                  filterQuality: FilterQuality.medium,
-                ),
+                child: const MaarifxYazi(width: 120),
               ),
               const SizedBox(height: 18),
               Text(

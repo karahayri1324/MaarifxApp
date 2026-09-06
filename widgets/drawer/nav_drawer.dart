@@ -22,21 +22,17 @@ class NavDrawer extends StatelessWidget {
 
     return Drawer(
       backgroundColor: context.bgSecondary,
+      elevation: 1,
+      width: 300,
       child: SafeArea(
         child: Column(
           children: [
             // Başlık: yazı-logo + yeni sohbet
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 12, 10),
+              padding: const EdgeInsets.fromLTRB(16, 18, 12, 12),
               child: Row(
                 children: [
-                  Image.asset(
-                    context.wordmarkAsset,
-                    height: 22,
-                    fit: BoxFit.contain,
-                    filterQuality: FilterQuality.medium,
-                    semanticLabel: 'MaariFx',
-                  ),
+                  const MaarifxYazi(height: 27),
                   const Spacer(),
                   Tooltip(
                     message: 'Yeni sohbet',
@@ -45,16 +41,16 @@ class NavDrawer extends StatelessWidget {
                         chatProvider.startNewChat();
                         Navigator.of(context).pop();
                       },
-                      borderRadius: BorderRadius.circular(9),
+                      borderRadius: BorderRadius.circular(11),
                       child: Container(
-                        width: 34,
-                        height: 34,
+                        width: 42,
+                        height: 42,
                         decoration: BoxDecoration(
                           color: context.bgPrimary,
-                          borderRadius: BorderRadius.circular(9),
+                          borderRadius: BorderRadius.circular(11),
                           border: Border.all(color: context.borderColor),
                         ),
-                        child: Icon(Icons.edit_outlined, size: 17, color: context.textPrimary),
+                        child: Icon(Icons.edit_outlined, size: 21, color: context.textPrimary),
                       ),
                     ),
                   ),
@@ -92,7 +88,7 @@ class NavDrawer extends StatelessWidget {
                               Text(
                                 user.displayNameOrEmail,
                                 style: TextStyle(
-                                  fontSize: 13.5,
+                                  fontSize: 14.5,
                                   fontWeight: FontWeight.w500,
                                   color: context.textPrimary,
                                 ),
@@ -366,15 +362,15 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 2, 12, 6),
           child: SizedBox(
-            height: 36,
+            height: 40,
             child: TextField(
               controller: _searchController,
               onChanged: (value) => setState(() => _searchQuery = value),
-              style: TextStyle(fontSize: 13, color: context.textPrimary),
+              style: TextStyle(fontSize: 14.5, color: context.textPrimary),
               decoration: InputDecoration(
                 hintText: 'Sohbetlerde ara',
-                hintStyle: TextStyle(fontSize: 13, color: context.textMuted),
-                prefixIcon: Icon(Icons.search_rounded, size: 17, color: context.textMuted),
+                hintStyle: TextStyle(fontSize: 14.5, color: context.textMuted),
+                prefixIcon: Icon(Icons.search_rounded, size: 19, color: context.textMuted),
                 prefixIconConstraints: const BoxConstraints(minWidth: 34, minHeight: 0),
                 suffixIcon: _searchQuery.isNotEmpty
                     ? IconButton(
@@ -488,11 +484,11 @@ class _ChatListItem extends StatelessWidget {
         onLongPress: onLongPress,
         borderRadius: BorderRadius.circular(8),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
           child: Text(
             conversation.title,
             style: TextStyle(
-              fontSize: 13.5,
+              fontSize: 15,
               fontWeight: acik ? FontWeight.w500 : FontWeight.w400,
               color: context.textPrimary,
             ),

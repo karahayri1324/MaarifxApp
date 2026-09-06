@@ -28,15 +28,7 @@ class AuthIskelet extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Center(
-                  child: Image.asset(
-                    context.wordmarkAsset,
-                    height: 26,
-                    fit: BoxFit.contain,
-                    filterQuality: FilterQuality.medium,
-                    semanticLabel: 'MaariFx',
-                  ),
-                ),
+                const Center(child: MaarifxYazi(height: 26)),
                 const SizedBox(height: 26),
                 Text(
                   baslik,

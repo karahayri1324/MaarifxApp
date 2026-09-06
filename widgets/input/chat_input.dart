@@ -42,8 +42,6 @@ class _ChatInputState extends State<ChatInput> {
   final _imagePicker = ImagePicker();
   File? _selectedImage;
   bool _isPreparingImage = false;
-  bool _drawOnImage = true; // build'de ChatProvider'dan senkronlanır (EFEKTİF mod)
-  bool _inExistingConversation = false; // build'de senkronlanır
 
   // Çizim modu AÇIK → YENİ soruda görsel zorunlu; KAPALI → görsel veya metin yeterli.
   // Mevcut sohbette takip mesajı görselsiz de serbest (backend'in desteklediği
@@ -56,15 +54,6 @@ class _ChatInputState extends State<ChatInput> {
     if (!widget.enabled || _isPreparingImage) return false;
     return _selectedImage != null || _textController.text.trim().isNotEmpty;
   }
-
-  /// Çizim açık + görsel yok → istek ÇİZİMSİZ gidecek.
-  ///
-  /// Koşul, provider'daki `gorselsizDusus` ile BİREBİR aynı olmak zorunda
-  /// (chat_provider.dart:555). Eskiden burada fazladan `!_inExistingConversation`
-  /// vardı: mevcut çizimli sohbette fotoğrafsız yazılan takip de sessizce
-  /// çizimsize düşüyordu ama kullanıcıya HİÇBİR ŞEY söylenmiyordu — "çizim
-  /// bekliyordum, uygulama bozuldu" algısının kaynağı buydu.
-  bool get _cizimsizeDusecek => _drawOnImage && _selectedImage == null;
 
   @override
   void didUpdateWidget(covariant ChatInput oldWidget) {
@@ -260,15 +249,8 @@ class _ChatInputState extends State<ChatInput> {
 
   @override
   Widget build(BuildContext context) {
-    // Gönderim kuralları drawOnImage'a bağlı — provider'ı izle, state'i taşı.
-    // EFEKTİF mod: sohbet kilitliyse sohbetinki, değilse kullanıcı tercihi.
-    final cp = context.watch<ChatProvider>();
-    _drawOnImage = cp.effectiveDrawOnImage;
-    // MOD KİLİDİ `_conversationMode`'da tutuluyor ve gönderimin EN BAŞINDA
-    // iyimser olarak kuruluyor; `currentConversationId` ise ancak sunucu
-    // cevabı dönünce atanıyor. İlk istek uçuşta olduğu sürece ikisi ayrışır ve
-    // uyarı metni yanlış dalı gösterirdi — kilidin kendi getter'ını okuyoruz.
-    _inExistingConversation = cp.isModeLocked;
+    // Model çipi ve sayfalar sağlayıcıyı okur; composer yeniden kurulsun diye izle.
+    context.watch<ChatProvider>();
 
     return Container(
       padding: EdgeInsets.only(
@@ -553,29 +535,12 @@ class _ChatInputState extends State<ChatInput> {
   Future<void> _sendMessage() async {
     if (!_canSend) return;
 
-    // ÇİZİMLİ SOHBETTE ÇİZİMSİZ MESAJ SESSİZCE GİTMEZ. Çizim soru görselinin
-    // ÜZERİNE yapılır; fotoğraf yoksa istek zorunlu olarak çizimsiz gider
-    // (chat_provider.dart `gorselsizDusus`). Bu, kullanıcının çizim beklediği
-    // anda düz metin almasına yol açıyordu. Eski SnackBar kaçırılabiliyordu ve
-    // mevcut sohbette hiç gösterilmiyordu; yerine GÖRÜLMESİ ZORUNLU, gönderimi
-    // durduran bir onay koydu.
-    if (_cizimsizeDusecek) {
-      final devam = await _cizimsizOnayi();
-      if (!mounted || !devam) return;   // vazgeçildi → metin/fotoğraf korunur
-      // Diyalog açıkken paylaşım (share intent) yoluyla fotoğraf gelmiş
-      // olabilir: `didUpdateWidget` modal'ın altında çalışmaya devam ediyor.
-      // O hâlde kullanıcının onayladığı şey ("metin olarak sor") artık geçerli
-      // değil — istek çizimli gider ve sohbet çizime kilitlenirdi. Koşulu
-      // yeniden doğrulayıp sessizce ters karar vermeyi engelliyoruz.
-      if (!_cizimsizeDusecek) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Fotoğraf eklendi — çizimli çözüm için tekrar gönder'),
-          behavior: SnackBarBehavior.floating,
-        ));
-        return;
-      }
-    }
-
+    // ÇİZİM AÇIK + FOTOĞRAF YOK → istek zorunlu olarak çizimsiz gider ve ilk
+    // mesajsa sohbet metin moduna KİLİTLENİR (chat_provider `gorselsizDusus`).
+    // Eskiden burada gönderimi durduran bir onay penceresi vardı; kullanıcı
+    // her seferinde aynı şeyi onaylamak zorunda kalıyordu. Kaldırıldı: mesaj
+    // doğrudan gider, kilit sessizce kurulur. Modun ne olduğu composer'daki
+    // model/çizim göstergelerinden zaten okunuyor.
     widget.onSend(_selectedImage, _textController.text.trim());
 
     setState(() {
@@ -584,69 +549,6 @@ class _ChatInputState extends State<ChatInput> {
     });
   }
 
-  /// Çizim açıkken fotoğrafsız gönderim onayı.
-  ///
-  /// İki ayrı durum, iki ayrı sonuç — metin de ona göre:
-  ///  • Sohbet HENÜZ başlamadıysa: bu mesaj sohbetin modunu KALICI olarak
-  ///    çizimsize kilitler. Kilit sunucuda da tutulduğu için kullanıcı sonradan
-  ///    fotoğraf eklese bile o sohbette bir daha çizimli çözüm ALAMAZ; tek çıkış
-  ///    yeni sohbet. Bunu önceden söylemek zorundayız.
-  ///  • Sohbet zaten çizimli kilitliyse: kilit değişmez, yalnız BU tur çizilmez.
-  ///
-  /// Dönen: true = kullanıcı bilerek metin olarak sormayı seçti.
-  Future<bool> _cizimsizOnayi() async {
-    final kilitli = _inExistingConversation;
-
-    final sonuc = await showDialog<String>(
-      context: context,
-      // Boşluğa dokunarak kapatılamaz. Geri tuşu yine kapatabilir; o durumda
-      // sonuç null döner ve gönderim İPTAL edilir — yani kaçırılan bir uyarı
-      // asla sessiz bir gönderime dönüşmez.
-      barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        icon: const Icon(Icons.photo_camera_outlined,
-            size: 28, color: AppTheme.warning),
-        title: Text(kilitli
-            ? 'Bu mesaj çizilmeyecek'
-            : 'Bu sohbet metin moduna kilitlenecek'),
-        content: Text(
-          kilitli
-              ? 'Bu sohbet çizimli, ama gönderdiğin mesajda fotoğraf yok. '
-                'Çizim soru görselinin üzerine yapıldığı için fotoğrafsız '
-                'mesaj çizilmez; cevap sohbette düz metin olarak gelir ve '
-                'çözüm oynatıcısı açılmaz.\n\n'
-                'Çizimli çözüm istiyorsan sorunun fotoğrafını ekle.'
-              : 'Fotoğraf eklemeden gönderirsen bu sohbet metin modunda '
-                'başlar ve bir daha değiştirilemez — sonradan fotoğraf '
-                'eklesen bile bu sohbette soru üzerine çizim yapılamaz.\n\n'
-                'Çizimli çözüm için önce sorunun fotoğrafını ekle; düz sohbet '
-                'istiyorsan metin olarak devam edebilirsin.',
-        ),
-        actionsOverflowButtonSpacing: 4,
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, 'iptal'),
-            child: const Text('Vazgeç'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, 'metin'),
-            child: const Text('Metin olarak sor'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, 'foto'),
-            child: const Text('Fotoğraf ekle'),
-          ),
-        ],
-      ),
-    );
-
-    if (!mounted) return false;
-    if (sonuc == 'foto') {
-      _showImagePicker();   // kullanıcı fotoğrafı seçip yeniden gönderir
-      return false;
-    }
-    return sonuc == 'metin';
-  }
 }
 
 /// Soru uzerine cizme toggle
