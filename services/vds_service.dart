@@ -622,12 +622,19 @@ class VdsService {
     }
   }
 
-  /// Hesabi sil
-  Future<Map<String, dynamic>> deleteAccount() async {
+  /// Hesabı sil — SUNUCU e-posta + şifre doğrular (yalnız jeton YETMEZ).
+  ///
+  /// Ayarlarda yanlışlıkla dokunulan bir satır hesabı silebiliyordu; artık
+  /// kullanıcı kim olduğunu ve şifresini yeniden yazmak zorunda.
+  Future<Map<String, dynamic>> deleteAccount({
+    required String email,
+    required String password,
+  }) async {
     try {
       final response = await http.delete(
         Uri.parse('$_baseUrl${AppConfig.deleteAccountEndpoint}'),
         headers: _headers,
+        body: jsonEncode({'email': email, 'password': password}),
       ).timeout(AppConfig.connectionTimeout);
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;

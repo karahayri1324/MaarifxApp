@@ -366,6 +366,7 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
             child: TextField(
               controller: _searchController,
               onChanged: (value) => setState(() => _searchQuery = value),
+              onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
               style: TextStyle(fontSize: 14.5, color: context.textPrimary),
               decoration: InputDecoration(
                 hintText: 'Sohbetlerde ara',
@@ -407,6 +408,7 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
           child: conversations.isEmpty
               ? _buildEmptyState(context, allConversations.isEmpty)
               : ListView.builder(
+                  keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
                   controller: _searchQuery.isEmpty ? _scrollController : null,
                   padding: const EdgeInsets.fromLTRB(6, 2, 6, 8),
                   itemCount: ogeler.length + (_isLoadingMore ? 1 : 0),

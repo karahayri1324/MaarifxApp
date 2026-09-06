@@ -19,6 +19,15 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
+  /// Yayıncı satırının ölçüsü: yazı boyu. Eski hâlde simge 18, yazı 12 idi
+  /// (birbirine uymuyordu); 12 × 1,4 ≈ 17.
+  static const double _yayinciBoyu = 17;
+
+  /// Simgenin KUTU boyu. PNG'nin içinde ~%37 saydam pay var (256 px'lik karede
+  /// çizim 161 px); kutuyu yazı boyuna eşitlersek simge gözle KÜÇÜK kalıyor.
+  /// Kutu biraz büyütülünce görünen işaret, yazının büyük harf boyuna oturuyor.
+  static const double _yayinciSimge = 20;
+
   bool _authReady = false;
 
   late final AnimationController _controller;
@@ -124,17 +133,23 @@ class _SplashScreenState extends State<SplashScreen>
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
+                  // Simge ve yazı GÖZLE aynı boyutta; satırın tamamı eski
+                  // ölçünün 1,4 katı.
                   Image.asset(
                     'assets/images/Ogretimsayfam.png',
-                    width: 18,
-                    height: 18,
+                    width: _yayinciSimge,
+                    height: _yayinciSimge,
                     fit: BoxFit.contain,
                     errorBuilder: (_, __, ___) => const SizedBox.shrink(),
                   ),
-                  const SizedBox(width: 7),
+                  const SizedBox(width: 8),
                   Text(
-                    'bir ÖğretimSayfam uygulaması',
-                    style: TextStyle(fontSize: 12, color: context.textMuted),
+                    'Bir ÖğretimSayfam ürünü',
+                    style: TextStyle(
+                      fontSize: _yayinciBoyu,
+                      height: 1,
+                      color: context.textMuted,
+                    ),
                   ),
                 ],
               ),

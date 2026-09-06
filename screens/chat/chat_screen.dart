@@ -458,6 +458,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       backgroundColor: context.bgSecondary,
       appBar: _buildAppBar(context, isGuest),
       drawer: isGuest ? null : const NavDrawer(),
+      // Çekmece kenardan çekilerek de açılabiliyor; o yolda düğmenin unfocus'u
+      // çalışmaz ve composer odakta kaldığı için klavye çekmecenin üstünde
+      // açık kalıyordu. Açılış hangi yoldan olursa olsun odağı bırak.
+      onDrawerChanged: (acik) {
+        if (acik) FocusManager.instance.primaryFocus?.unfocus();
+      },
       // Çekmece hissiyatı: varsayılan kenar şeridi ~20 px ve sürükleme parmak
       // KALKINCA başlıyordu; açmak için ekranın en kenarını bulmak gerekiyordu.
       // Şerit genişletildi ve sürükleme parmak DEĞİNCE başlıyor → anında takip.
@@ -619,7 +625,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               iconSize: 26,
               splashRadius: 24,
               tooltip: 'Sohbetler',
-              onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+              onPressed: () {
+                FocusManager.instance.primaryFocus?.unfocus();
+                _scaffoldKey.currentState?.openDrawer();
+              },
             ),
       automaticallyImplyLeading: false,
       // Kutulu logo ve model rozeti yerine yazı-logo. Model composer'dan seçilir.
@@ -727,6 +736,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     return CustomScrollView(
       controller: _scrollController,
       reverse: true,
+      // Yazmayı bırakıp listeyi kaydırmak klavyeyi kapatsın (yazmıyorken
+      // klavyenin ekranın yarısını kaplaması en sık gelen şikâyetti).
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       slivers: [
         // Dipteki boşluk: eski ListView padding'i (all 16) + balonun kendi alt
         // boşluğu (16) ile aynı görünüm korunur.

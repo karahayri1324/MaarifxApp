@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../config/theme.dart';
+import 'hesap_silme_ekrani.dart';
 import '../../widgets/common/class_level_sheet.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
@@ -162,31 +163,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     controller.dispose();
   }
 
+  /// Hesap silme — TEK DOKUNUŞLA OLMAZ.
+  ///
+  /// Ayarlarda yanlışlıkla dokunulan bir satır hesabı kalıcı olarak
+  /// siliyordu. Artık ayrı bir ekranda e-posta + şifre + onay cümlesi
+  /// istenir; sunucu da (server.js delete-account) aynı ikisini doğrular,
+  /// yani koruma yalnız arayüzde değil.
   Future<void> _handleDeleteAccount() async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Hesabı sil'),
-        content: const Text(
-          'Hesabın ve tüm verilerin kalıcı olarak silinir. Bu işlem geri alınamaz.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('İptal'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: ctx.pen),
-            child: const Text('Hesabı sil'),
-          ),
-        ],
+    final eposta = context.read<AuthProvider>().user?.email ?? '';
+    final kimlik = await Navigator.of(context).push<({String eposta, String sifre})>(
+      MaterialPageRoute(
+        builder: (_) => HesapSilmeEkrani(hesapEpostasi: eposta),
+        fullscreenDialog: true,
       ),
     );
 
-    if (confirm == true && mounted) {
+    if (kimlik != null && mounted) {
       final vdsService = context.read<ChatProvider>().vdsService;
-      final result = await vdsService.deleteAccount();
+      final result = await vdsService.deleteAccount(
+        email: kimlik.eposta,
+        password: kimlik.sifre,
+      );
 
       if (mounted) {
         if (result['success'] == true) {

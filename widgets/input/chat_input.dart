@@ -302,6 +302,8 @@ class _ChatInputState extends State<ChatInput> {
                   ),
                   maxLines: 5,
                   minLines: 1,
+                  // Alanın dışına dokunulunca klavye kapansın.
+                  onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
                   textInputAction: TextInputAction.send,
                   onChanged: (_) => setState(() {}),
                   onSubmitted: (_) => _sendMessage(),
