@@ -84,12 +84,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   // anında deneme var. Başarı ölçütü onPageFinished DEĞİL (Chromium'un kendi
   // hata sayfası için de ateşlenir), canvas'ın JS el sıkışmasıdır (_jsReady).
   int _yuklemeDenemesi = 0; // kaçıncı yükleme (1 = ilk açılış)
-  // İçerik süreci ölümü (iOS jetsam / canlılık yok): panelsiz sessiz yeniden yükleme.
-  // Kısa sürede üst üste olursa (deterministik ölüm) normal panele düşer.
-  int _motorOlumSayisi = 0;
-  DateTime? _sonMotorOlumu;
-  static const int _motorOlumTavani = 3;
-  static const Duration _motorOlumPenceresi = Duration(minutes: 5);
   int _otoDenemeSayisi = 0; // ardışık otomatik deneme sayısı (başarıda sıfırlanır)
   int _canvasOtoDeneme = 0; // canvas'ın bildirdiği hatalar için ayrı, SINIRLI sayaç
   _HataTuru? _hataTuru;
@@ -118,8 +112,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   // Playback state
   bool _isPlaying = false;
   bool _hasEnded = false;
-  DateTime? _bitisAni; // son 'ended' olayı (hemen ardından gelen bayat timeUpdate yutulur)
-  bool _kalemModu = false; // canvas kalem (işaretleme) modu açık mı — sistem geri hareketi için
   // Oynatma hizi UI'i yok; ses her zaman 1.0x. Alan, ileride hiz kontrolu
   // eklenirse tek dokunus noktasi olsun diye duruyor.
   static const double _speed = 1.0;
@@ -398,31 +390,18 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// Sayfa hazır mı? (iOS'ta ölü içerik süreci JS çalıştıramaz → yeniden yükle.)
   Future<void> _canlilikYokla({required String sebep}) async {
-    // TOLERANS (2026-09-05): 3 sn'lik TEK yoklama, ağır tuval işi (16 Mpx yeniden basım,
-    // kalem mürekkep çıkarma) ya da Android'in arka plandan dönüşte WebView'i geç
-    // uyandırması yüzünden YANLIŞ "motor öldü" kararı verip sayfayı yeniden yüklüyordu
-    // (izleyici "Çözümü İzle" ekranına geri atılıyor, ilerleme kayboluyordu).
-    // Artık 8 sn + 2 sn sonra ikinci şans; iki yoklama da cevapsızsa yeniden yükle.
-    var alive = await _yokla(const Duration(seconds: 8));
-    if (!alive && !_disposed && mounted) {
-      await Future.delayed(const Duration(seconds: 2));
-      if (_disposed || !mounted) return;
-      alive = await _yokla(const Duration(seconds: 8));
+    var alive = false;
+    try {
+      final r = await _webViewController
+          .runJavaScriptReturningResult('1+1')
+          .timeout(const Duration(seconds: 3));
+      alive = r.toString().contains('2');
+    } catch (_) {
+      alive = false;
     }
     if (alive || _disposed || !mounted) return;
     logD('[Player] canlılık yoklaması başarısız ($sebep) → yeniden yükleme');
     _yuklemeHatasi(_HataTuru.motorOldu, 'yoklama: $sebep', hemen: true);
-  }
-
-  Future<bool> _yokla(Duration sure) async {
-    try {
-      final r = await _webViewController
-          .runJavaScriptReturningResult('1+1')
-          .timeout(sure);
-      return r.toString().contains('2');
-    } catch (_) {
-      return false;
-    }
   }
 
   /// Sayfayı (yeniden) yükler. Tüm giriş yolları buradan geçer: ilk açılış,
@@ -446,9 +425,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     logD('[Player] yükleme #$_yuklemeDenemesi ($sebep)');
     // Aynı URL'e loadRequest: Android'de hata sayfasından da asıl adresi
     // yeniden ister; iOS'ta uçuştaki yükleme -999 ile iptal olur (yutuluyor).
-    // Yeniden yüklemede canvas'a `devam=1`: kaydettiği kareden sürsün (ilk açılışta yok).
-    final hedef = _yuklemeDenemesi > 1 ? _devamUrl(_url, sebep) : _url;
-    unawaited(_webViewController.loadRequest(Uri.parse(hedef)).catchError((e) {
+    unawaited(_webViewController.loadRequest(Uri.parse(_url)).catchError((e) {
       logD('[Player] loadRequest hatası: $e');
     }));
     // Yavaş hat ipucu: spinner sürerken "Tekrar Dene" sunulur (asılı TCP'de
@@ -466,15 +443,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     _durmaBekcisiKur();
   }
 
-  // Kara kutu (2026-09-05): yeniden yükleme NEDENİ (motorOldu / yoklama / zaman aşımı / elle…),
-  // bu penceredeki motor ölümü sayısı ve deneme numarası canvas'a gider; canvas 'acilis' olayında
-  // VDS'e raporlar → Android'de de "neden yeniden yüklendi" sahada görülür.
-  String _devamUrl(String u, String sebep) {
-    final q = 'devam=1&neden=${Uri.encodeQueryComponent(sebep)}'
-        '&olum=$_motorOlumSayisi&deneme=$_yuklemeDenemesi';
-    return u.contains('?') ? '$u&$q' : '$u?$q';
-  }
-
   /// Otomatik deneme gecikmesi: ağ hataları için sınırsız ama tavanlı geri
   /// çekilme (ekran açık kaldığı sürece dener); canvas hataları için sınırlı.
   Duration _otoGecikme(_HataTuru tur) {
@@ -489,23 +457,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// Bir yükleme hatası oldu: paneli göster, politikaya göre otomatik denemeyi kur.
   void _yuklemeHatasi(_HataTuru tur, String ayrinti, {bool hemen = false}) {
     if (_disposed || !mounted) return;
-    if (tur == _HataTuru.motorOldu && hemen) {
-      // İçerik süreci öldü (iOS'ta bellek/jetsam; oynatma ortasında olabilir):
-      // kırmızı panel GÖSTERME — spinner ile hemen yeniden yükle, canvas kaldığı
-      // kareden sürer (devam=1). 5 dk içinde 3'ten fazla ölürse panele düş.
-      final simdi = DateTime.now();
-      if (_sonMotorOlumu == null ||
-          simdi.difference(_sonMotorOlumu!) > _motorOlumPenceresi) {
-        _motorOlumSayisi = 0;
-      }
-      _sonMotorOlumu = simdi;
-      if (_motorOlumSayisi < _motorOlumTavani) {
-        _motorOlumSayisi++;
-        logD('[Player] içerik süreci öldü ($ayrinti) → sessiz yükleme #$_motorOlumSayisi');
-        _yukle(sebep: 'motorOldu');
-        return;
-      }
-    }
     _tumZamanlayicilariIptalEt();
     _postLoadErrorTimer?.cancel();
     String mesaj;
@@ -652,13 +603,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         case 'audioSeek':
           _audioService.seek((data['time'] as num?)?.toInt() ?? 0);
         case 'ended':
-          _bitisAni = DateTime.now();
           if (mounted) setState(() { _hasEnded = true; _isPlaying = false; });
           _audioService.pause();
-        case 'markStarted':
-          _kalemModu = true;
-        case 'markEnded':
-          _kalemModu = false;
         case 'error':
           _canvasHatasi(
             data['message'] as String? ?? 'Hata',
@@ -754,19 +700,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   void _handleTimeUpdate(Map<String, dynamic> data) {
     if (!mounted) return;
     final ct = (data['currentTime'] as num?)?.toDouble() ?? 0;
-    // BİTİŞ KATMANI SIFIRLAMA (2026-09-05): oynatıcı sona gelince Flutter ortaya "yeniden
-    // oynat" düğmesi koyar ve bunu YALNIZ o düğme kaldırıyordu. Kullanıcı canvas'ın kendi
-    // ▶'ine bassa ya da çubuğu geri çekse video akarken düğme ekranın ortasında kalıyor;
-    // basınca seek(0) ile baştan başlatıp izleyiciyi "aynı sayfaya geri atıyordu".
-    // Oynatıcıdan gerçek ilerleme gelince katman kalkar (bitişten hemen sonraki bayat
-    // timeUpdate yutulur).
-    if (_hasEnded && ct > 0) {
-      final b = _bitisAni;
-      if (b == null || DateTime.now().difference(b).inMilliseconds > 800) {
-        setState(() { _hasEnded = false; _isPlaying = true; });
-      }
-      return;
-    }
     if (!_isPlaying && ct > 0 && !_hasEnded) {
       setState(() => _isPlaying = true);
     }
@@ -774,7 +707,6 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   void _handleAudioPlay(Map<String, dynamic> data) {
     final url = data['url'] as String?;
-    if (_hasEnded && mounted) setState(() { _hasEnded = false; _isPlaying = true; });
     if (url != null && url.isNotEmpty) {
       _audioService.play(url, startTimeMs: (data['startTime'] as num?)?.toInt() ?? 0);
       _audioService.setSpeed(_speed);
@@ -799,10 +731,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   void _togglePlayPause() {
     if (_hasEnded) {
-      // Yalnız play(): oynatıcı son karedeyse kendisi baştan başlar. Eski 'seek(0); play()'
-      // ikilisi iki oynatma başlatıcısını yarıştırıyor, kimi cihazda oynatma hemen
-      // duruyordu ("videoyu aç → basınca yine aynı sayfa, 3. denemede izleniyor").
-      _webViewController.runJavaScript('MaarifX.play();');
+      _webViewController.runJavaScript('MaarifX.seek(0); MaarifX.play();');
       setState(() { _hasEnded = false; _isPlaying = true; });
       _audioService.seek(0);
     } else if (_isPlaying) {
@@ -838,34 +767,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     _kapat();
   }
 
-  // ─── Sistem geri (Android kenar kaydırma / geri tuşu) ─────────────────
-  // (2026-09-05) Rota PopScope'suzdu: Android'de kenardan kaydırma (kalemle çizerken,
-  // çubuğu tutarken sık) rotayı ONAYSIZ düşürüyordu → "izlerken chatin ana sayfasına
-  // atıyor". Artık: kalem modu açıksa önce kalem kapanır; canlı derste onay sorulur;
-  // tekrarda kapanır (tek kapı _kapat).
-  void _sistemGeri() {
-    if (_kalemModu) {
-      _kalemModu = false;
-      unawaited(_webViewController
-          .runJavaScript(
-              'try{if(window.MaarifX&&window.MaarifX.exitAnnotation){window.MaarifX.exitAnnotation();}}catch(e){}')
-          .catchError((_) {}));
-      return;
-    }
-    _goBack();
-  }
-
   // ─── Build ──────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (bool didPop, Object? result) {
-        if (didPop) return;
-        _sistemGeri();
-      },
-      child: Scaffold(
+    return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         fit: StackFit.expand,
@@ -923,7 +829,6 @@ class _PlayerScreenState extends State<PlayerScreen>
           ),
 
         ],
-      ),
       ),
     );
   }

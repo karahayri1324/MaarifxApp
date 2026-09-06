@@ -23,8 +23,9 @@ class StepNavigation extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
-        color: context.bgTertiary,
+        color: context.bgPrimary,
         borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        border: Border.all(color: context.borderColor),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -41,12 +42,8 @@ class StepNavigation extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: Text(
-              'Adim ${currentStep + 1} / $totalSteps',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: context.textSecondary,
-              ),
+              'Adım ${currentStep + 1} / $totalSteps',
+              style: context.mono(fontSize: 12, color: context.textSecondary),
             ),
           ),
 
@@ -78,7 +75,7 @@ class StepNavigation extends StatelessWidget {
           child: Icon(
             icon,
             size: 20,
-            color: enabled ? AppTheme.primary : context.textMuted,
+            color: enabled ? context.blue : context.textMuted,
           ),
         ),
       ),

@@ -16,7 +16,6 @@ class LoadingOverlay extends StatefulWidget {
 class _LoadingOverlayState extends State<LoadingOverlay>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
-  late Animation<double> _scaleAnimation;
 
   @override
   void initState() {
@@ -25,10 +24,6 @@ class _LoadingOverlayState extends State<LoadingOverlay>
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     )..repeat(reverse: true);
-
-    _scaleAnimation = Tween<double>(begin: 1.0, end: 1.1).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-    );
   }
 
   @override
@@ -40,68 +35,46 @@ class _LoadingOverlayState extends State<LoadingOverlay>
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: Colors.black.withOpacity(0.5),
+      color: Colors.black.withOpacity(0.45),
       child: Center(
         child: Container(
-          padding: const EdgeInsets.all(32),
+          padding: const EdgeInsets.fromLTRB(28, 26, 28, 20),
           decoration: BoxDecoration(
             color: context.bgPrimary,
-            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-            boxShadow: AppTheme.shadowMd,
+            borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+            border: Border.all(color: context.borderColor),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              AnimatedBuilder(
-                animation: _controller,
-                builder: (context, child) {
-                  return Transform.scale(
-                    scale: _scaleAnimation.value,
-                    child: Opacity(
-                      opacity: 0.85 + (_scaleAnimation.value - 1.0) * 1.5,
-                      child: Container(
-                        width: 80,
-                        height: 80,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(16),
-                          color: context.bgSecondary,
-                          boxShadow: AppTheme.shadowSm,
-                        ),
-                        padding: const EdgeInsets.all(12),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: Image.asset(
-                            'assets/images/karahayri.png',
-                            fit: BoxFit.contain,
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                },
+              FadeTransition(
+                opacity: Tween<double>(begin: 0.55, end: 1.0).animate(_controller),
+                child: Image.asset(
+                  context.wordmarkAsset,
+                  width: 120,
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.medium,
+                ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 18),
               Text(
-                'Oluşturuluyor...',
+                'Hazırlıyorum',
                 style: TextStyle(
-                  fontSize: 16,
+                  fontSize: 15,
                   fontWeight: FontWeight.w500,
                   color: context.textPrimary,
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 4),
               Text(
-                'Lütfen bekleyin',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: context.textSecondary,
-                ),
+                'Birazdan hazır olur',
+                style: TextStyle(fontSize: 13, color: context.textSecondary),
               ),
               if (widget.onCancel != null) ...[
-                const SizedBox(height: 24),
+                const SizedBox(height: 14),
                 TextButton(
                   onPressed: widget.onCancel,
-                  child: const Text('İptal'),
+                  child: const Text('Vazgeç'),
                 ),
               ],
             ],
@@ -118,40 +91,22 @@ class ServerErrorDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-      ),
-      title: const Row(
-        children: [
-          Icon(Icons.cloud_off, color: AppTheme.danger),
-          SizedBox(width: 12),
-          Text('Bağlantı Hatası'),
-        ],
-      ),
+      title: const Text('Sunucuya ulaşılamıyor'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Sunucuya ulaşılamıyor.',
-            style: TextStyle(
-              fontSize: 15,
-              color: context.textPrimary,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Bu sorun aşağıdaki nedenlerden kaynaklanabilir:',
+            'Olası sebepler:',
             style: TextStyle(fontSize: 13, color: context.textSecondary),
           ),
           const SizedBox(height: 6),
-          _bulletPoint(context, 'İnternet bağlantınız kesilmiş olabilir'),
+          _bulletPoint(context, 'İnternet bağlantın kesilmiş olabilir'),
           _bulletPoint(context, 'Sunucu bakım altında olabilir'),
           _bulletPoint(context, 'Ağ sorunu yaşanıyor olabilir'),
           const SizedBox(height: 10),
           Text(
-            'Lütfen bağlantınızı kontrol edip tekrar deneyin.',
+            'Bağlantını kontrol edip tekrar dene.',
             style: TextStyle(fontSize: 13, color: context.textSecondary),
           ),
         ],

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
@@ -11,6 +12,7 @@ import '../../config/theme.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../common/class_level_sheet.dart';
+import '../common/ui_bits.dart';
 import '../../config/log.dart';
 
 class ChatInput extends StatefulWidget {
@@ -19,10 +21,14 @@ class ChatInput extends StatefulWidget {
   final File? externalImage;
   final VoidCallback? onExternalImageConsumed;
 
+  /// Sunucu bakımda (system_closed): alan kapalı, "Bakım bitince tekrar dene".
+  final bool bakimda;
+
   const ChatInput({
     super.key,
     required this.onSend,
     this.enabled = true,
+    this.bakimda = false,
     this.externalImage,
     this.onExternalImageConsumed,
   });
@@ -82,12 +88,41 @@ class _ChatInputState extends State<ChatInput> {
   /// 90° kaymaya yol açar. Bunun yerine [_resolveRotation] EXIF tag'ı ile
   /// gerçek piksel oranını karşılaştırıp uygulanacak açıyı kendimiz
   /// hesaplar, FlutterImageCompress'e sabit `rotate` olarak veririz.
+  /// Sıkıştırılmış geçici JPEG'lerin ön eki. Temizlik bu ön eke bakar —
+  /// başkasının dosyasına dokunmayalım.
+  static const String _geciciOnEk = 'maarifx_';
+
+  /// Bir GÜNDEN eski geçici JPEG'leri siler.
+  ///
+  /// Her fotoğraf seçimi cache dizinine bir dosya bırakıyordu ve hiçbiri
+  /// silinmiyordu. Eşik bilerek geniş: seçili fotoğraf ve "Tekrar Dene"
+  /// verisindeki `File` referansı hep taze olur, onlara dokunulmaz.
+  static Future<void> _eskiGecicileriSil(Directory tempDir) async {
+    try {
+      final simdi = DateTime.now();
+      await for (final e in tempDir.list(followLinks: false)) {
+        if (e is! File) continue;
+        final ad = e.uri.pathSegments.last;
+        if (!ad.startsWith(_geciciOnEk) || !ad.endsWith('.jpg')) continue;
+        try {
+          final yas = simdi.difference(await e.lastModified());
+          if (yas > const Duration(days: 1)) await e.delete();
+        } catch (_) {
+          // tek dosyanın silinememesi temizliği durdurmaz
+        }
+      }
+    } catch (_) {
+      // temizlik en iyi çaba — fotoğraf akışını asla bozmaz
+    }
+  }
+
   Future<void> _processAndSetImage(File imageFile) async {
     if (mounted) setState(() => _isPreparingImage = true);
     try {
       final tempDir = await getTemporaryDirectory();
+      unawaited(_eskiGecicileriSil(tempDir));
       final ts = DateTime.now().millisecondsSinceEpoch;
-      final compressedPath = '${tempDir.path}/maarifx_$ts.jpg';
+      final compressedPath = '${tempDir.path}/$_geciciOnEk$ts.jpg';
 
       final rotation = await _resolveRotation(imageFile);
 
@@ -237,72 +272,71 @@ class _ChatInputState extends State<ChatInput> {
 
     return Container(
       padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        top: 12,
-        bottom: 12 + MediaQuery.of(context).padding.bottom,
+        left: 14,
+        right: 14,
+        top: 8,
+        bottom: 10 + MediaQuery.of(context).padding.bottom,
       ),
-      decoration: BoxDecoration(
-        color: context.bgPrimary,
-        border: Border(
-          top: BorderSide(color: context.borderColor),
-        ),
-      ),
+      color: context.bgSecondary,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Image Preview (hazırlanırken placeholder gösterilir)
+          // Görsel önizleme (hazırlanırken yer tutucu)
           if (_selectedImage != null || _isPreparingImage) _buildImagePreview(),
 
-          // Input Row
+          // İki satır: üstte metin, altta araç satırı (artı · model · gönder)
           Container(
             decoration: BoxDecoration(
-              color: context.bgSecondary,
+              color: widget.bakimda ? context.bgSecondary : context.bgPrimary,
               borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-              border: Border.all(color: context.borderColor, width: 2),
+              border: Border.all(color: context.borderColor),
             ),
-            padding: const EdgeInsets.all(6),
-            child: Row(
+            padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Upload Button
-                _buildIconButton(
-                  icon: Icons.add,
-                  onPressed: _showImagePicker,
-                  color: context.textSecondary,
-                ),
-
-                // Text Input
-                Expanded(
-                  child: TextField(
-                    controller: _textController,
-                    decoration: InputDecoration(
-                      hintText: _drawOnImage
-                          ? 'Fotoğraf ekle, istersen not yaz...'
-                          : 'Mesajını yaz...',
-                      hintStyle: TextStyle(color: context.textMuted),
-                      border: InputBorder.none,
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 12),
-                      filled: false,
-                    ),
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: context.textPrimary,
-                    ),
-                    maxLines: 4,
-                    minLines: 1,
-                    textInputAction: TextInputAction.send,
-                    onChanged: (_) => setState(() {}),
-                    onSubmitted: (_) => _sendMessage(),
+                TextField(
+                  controller: _textController,
+                  enabled: !widget.bakimda,
+                  decoration: InputDecoration(
+                    hintText: widget.bakimda
+                        ? 'Bakım bitince tekrar dene'
+                        : 'MaariFx\'e sor',
+                    hintStyle: TextStyle(color: context.textMuted, fontSize: 14.5),
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    disabledBorder: InputBorder.none,
+                    isDense: true,
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+                    filled: false,
                   ),
+                  style: TextStyle(
+                    fontSize: 15,
+                    height: 1.4,
+                    color: context.textPrimary,
+                  ),
+                  maxLines: 5,
+                  minLines: 1,
+                  textInputAction: TextInputAction.send,
+                  onChanged: (_) => setState(() {}),
+                  onSubmitted: (_) => _sendMessage(),
                 ),
-
-                // Model çipi ('3.0 ⌄' / 'MAX ⌄') — gönder butonunun solunda
-                _ModelChip(onTap: _showModelSheet),
-                const SizedBox(width: 4),
-
-                // Send Button
-                _buildSendButton(),
+                Row(
+                  children: [
+                    _buildIconButton(
+                      icon: Icons.add,
+                      onPressed: widget.bakimda ? null : _showImagePicker,
+                      color: context.textSecondary,
+                    ),
+                    const Spacer(),
+                    _ModelChip(onTap: _showModelSheet),
+                    const SizedBox(width: 6),
+                    _buildSendButton(),
+                  ],
+                ),
               ],
             ),
           ),
@@ -313,11 +347,11 @@ class _ChatInputState extends State<ChatInput> {
 
   Widget _buildImagePreview() {
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: context.bgTertiary,
-        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        color: context.bgPrimary,
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
         border: Border.all(color: context.borderColor),
       ),
       child: Row(
@@ -348,10 +382,11 @@ class _ChatInputState extends State<ChatInput> {
             const Spacer(),
             IconButton(
               onPressed: () => setState(() => _selectedImage = null),
-              icon: const Icon(Icons.close),
+              icon: const Icon(Icons.close_rounded, size: 18),
+              tooltip: 'Fotoğrafı kaldır',
               style: IconButton.styleFrom(
-                backgroundColor: AppTheme.danger,
-                foregroundColor: Colors.white,
+                backgroundColor: context.bgTertiary,
+                foregroundColor: context.textPrimary,
               ),
             ),
           ],
@@ -362,25 +397,45 @@ class _ChatInputState extends State<ChatInput> {
 
   Widget _buildIconButton({
     required IconData icon,
-    required VoidCallback onPressed,
+    required VoidCallback? onPressed,
     required Color color,
   }) {
     return IconButton(
       onPressed: onPressed,
-      icon: Icon(icon),
+      icon: Icon(icon, size: 22),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(width: 32, height: 32),
       style: IconButton.styleFrom(
         foregroundColor: color,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
   }
 
+  /// Gönder: 32 px kare, köşe 10; içerik varken mavi, yoksa sönük.
   Widget _buildSendButton() {
-    return IconButton(
-      onPressed: _canSend ? () => _sendMessage() : null,
-      icon: const Icon(Icons.send),
-      style: IconButton.styleFrom(
-        backgroundColor: _canSend ? AppTheme.primary : context.bgTertiary,
-        foregroundColor: _canSend ? Colors.white : context.textMuted,
+    final on = _canSend;
+    return Semantics(
+      button: true,
+      label: 'Gönder',
+      child: InkWell(
+        key: const ValueKey('composer_gonder'),
+        onTap: on ? () => _sendMessage() : null,
+        borderRadius: BorderRadius.circular(10),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: on ? context.blue : context.borderColor,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            Icons.arrow_upward_rounded,
+            size: 18,
+            color: on ? context.onBlue : context.textMuted,
+          ),
+        ),
       ),
     );
   }
@@ -390,22 +445,13 @@ class _ChatInputState extends State<ChatInput> {
   void _showModelSheet() {
     showModalBottomSheet(
       context: context,
-      builder: (sheetContext) => SafeArea(
+      builder: (sheetContext) => const SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: context.borderColor,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 8),
-            const ModelSelector(),
-            const SizedBox(height: 16),
+            SheetTutamac(),
+            ModelSelector(),
+            SizedBox(height: 16),
           ],
         ),
       ),
@@ -424,16 +470,8 @@ class _ChatInputState extends State<ChatInput> {
           child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            const SheetTutamac(),
             const SizedBox(height: 8),
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: context.borderColor,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 16),
 
             // Detay seviyesi secici
             _DetailLevelSelector(),
@@ -455,32 +493,16 @@ class _ChatInputState extends State<ChatInput> {
             ),
 
             ListTile(
-              leading: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.camera_alt, color: AppTheme.primary),
-              ),
-              title: const Text('Kamera'),
-              subtitle: const Text('Fotoğraf çek'),
+              leading: Icon(Icons.photo_camera_outlined, color: context.textSecondary),
+              title: const Text('Fotoğraf çek'),
               onTap: () {
                 Navigator.pop(sheetContext);
                 _pickImage(ImageSource.camera);
               },
             ),
             ListTile(
-              leading: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.photo_library, color: AppTheme.primary),
-              ),
-              title: const Text('Galeri'),
-              subtitle: const Text('Galeriden sec'),
+              leading: Icon(Icons.photo_library_outlined, color: context.textSecondary),
+              title: const Text('Galeriden seç'),
               onTap: () {
                 Navigator.pop(sheetContext);
                 _pickImage(ImageSource.gallery);
@@ -652,7 +674,7 @@ class _DrawOnImageToggle extends StatelessWidget {
                   'Soru Üzerine Çizme',
                   style: TextStyle(
                     fontSize: 14,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w500,
                     color: context.textPrimary,
                   ),
                 ),
@@ -749,7 +771,7 @@ class _MisafirSinifSatiri extends StatelessWidget {
                         'Sınıf Seviyesi',
                         style: TextStyle(
                           fontSize: 14,
-                          fontWeight: FontWeight.w600,
+                          fontWeight: FontWeight.w500,
                           color: context.textPrimary,
                         ),
                       ),
@@ -762,10 +784,10 @@ class _MisafirSinifSatiri extends StatelessWidget {
                 ),
                 Text(
                   etiket,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w500,
-                    color: AppTheme.primary,
+                    color: context.blue,
                   ),
                 ),
                 Icon(Icons.chevron_right_rounded,
@@ -802,7 +824,7 @@ class _EnableThinkingToggle extends StatelessWidget {
                   'Düşünme Süreci',
                   style: TextStyle(
                     fontSize: 14,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w500,
                     color: context.textPrimary,
                   ),
                 ),
@@ -870,62 +892,58 @@ class _DetailLevelSelector extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.tune, size: 18, color: context.textSecondary),
-              const SizedBox(width: 8),
               Text(
-                'Detay Seviyesi',
+                'Detay seviyesi',
                 style: TextStyle(
                   fontSize: 14,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w500,
                   color: context.textPrimary,
                 ),
               ),
               const Spacer(),
               Text(
                 _labels[level - 1],
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: AppTheme.primary,
-                ),
+                style: TextStyle(fontSize: 13, color: context.textSecondary),
               ),
             ],
           ),
           const SizedBox(height: 10),
-          Row(
-            children: List.generate(5, (i) {
-              final lvl = i + 1;
-              final selected = lvl == level;
-              return Expanded(
-                child: GestureDetector(
-                  onTap: () => chatProvider.setDetailLevel(lvl),
-                  child: Container(
-                    margin: EdgeInsets.only(right: i < 4 ? 6 : 0),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    decoration: BoxDecoration(
-                      color: selected
-                          ? AppTheme.primary
-                          : AppTheme.primary.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: selected
-                            ? AppTheme.primary
-                            : AppTheme.primary.withOpacity(0.2),
+          Container(
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: context.bgPrimary,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: context.borderColor),
+            ),
+            child: Row(
+              children: List.generate(5, (i) {
+                final lvl = i + 1;
+                final selected = lvl == level;
+                return Expanded(
+                  child: InkWell(
+                    onTap: () => chatProvider.setDetailLevel(lvl),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      decoration: BoxDecoration(
+                        color: selected ? context.tint : null,
+                        border: i == 0
+                            ? null
+                            : Border(left: BorderSide(color: context.borderColor)),
                       ),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      '$lvl',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: selected ? Colors.white : AppTheme.primary,
+                      alignment: Alignment.center,
+                      child: Text(
+                        '$lvl',
+                        style: context.mono(
+                          fontSize: 13,
+                          fontWeight: selected ? FontWeight.w500 : FontWeight.w400,
+                          color: selected ? context.textPrimary : context.textSecondary,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              );
-            }),
+                );
+              }),
+            ),
           ),
         ],
       ),
@@ -990,38 +1008,25 @@ class _ModelChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final model = context.select<ChatProvider, String>((p) => p.model);
     final isMax = model == '3.0-max';
+    final renk = isMax ? context.blue : context.textSecondary;
 
-    return GestureDetector(
+    return InkWell(
       onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
-          gradient: isMax
-              ? const LinearGradient(
-                  colors: [AppTheme.primary, AppTheme.primaryDark],
-                )
-              : null,
-        ),
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 6, 4, 6),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              // MAX açıkken yalnız 'MAX' — '3.0 MAX' çipi gönder butonunu sıkıştırıyordu
               isMax ? 'MAX' : '3.0',
-              style: TextStyle(
+              style: context.mono(
                 fontSize: 12,
-                fontWeight: isMax ? FontWeight.w700 : FontWeight.w500,
-                letterSpacing: isMax ? 0.5 : 0,
-                color: isMax ? Colors.white : context.textMuted,
+                color: renk,
+                fontWeight: isMax ? FontWeight.w500 : FontWeight.w400,
               ),
             ),
-            Icon(
-              Icons.keyboard_arrow_down_rounded,
-              size: 15,
-              color: isMax ? Colors.white : context.textMuted,
-            ),
+            Icon(Icons.keyboard_arrow_down_rounded, size: 15, color: renk),
           ],
         ),
       ),
@@ -1155,21 +1160,15 @@ class _ModelOption extends StatelessWidget {
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 6, vertical: 2),
                             decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: [
-                                  AppTheme.primary,
-                                  AppTheme.primaryDark,
-                                ],
-                              ),
+                              color: context.tint,
                               borderRadius: BorderRadius.circular(6),
                             ),
-                            child: const Text(
+                            child: Text(
                               'MAX',
-                              style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.5,
-                                color: Colors.white,
+                              style: context.mono(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w500,
+                                color: context.blue,
                               ),
                             ),
                           ),

@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../config/theme.dart';
 import '../../models/chat_message.dart';
@@ -12,9 +11,30 @@ class UserMessageWidget extends StatelessWidget {
     required this.message,
   });
 
+  /// Görsel çizilemediğinde (bozuk base64 / indirilemeyen URL) yer tutucu.
+  Widget _gorselHatasi(BuildContext context) {
+    return Container(
+      height: 80,
+      alignment: Alignment.center,
+      color: Colors.black.withOpacity(0.15),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.broken_image_outlined, size: 18, color: Colors.white70),
+          SizedBox(width: 8),
+          Text('Görsel yüklenemedi',
+              style: TextStyle(fontSize: 12, color: Colors.white70)),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isSending = message.status == MessageStatus.sending;
+    // Çözülmüş baytlar mesajda önbellekli — bkz. ChatMessage.imageBytes.
+    // Bozuk base64'te null döner; o durumda varsa imageUrl'e düşülür.
+    final gorselBaytlari = message.imageBytes;
 
     // Quiz cevabı: ham ```maarifx-quiz-answer {JSON}``` yerine okunur kart.
     final quizAnswer = parseQuizAnswer(message.text);
@@ -29,32 +49,32 @@ class UserMessageWidget extends StatelessWidget {
         Flexible(
           child: Container(
             constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.85,
+              maxWidth: MediaQuery.of(context).size.width * 0.84,
             ),
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
               color: context.userBubbleBg,
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(AppTheme.radiusMd),
-                topRight: Radius.circular(AppTheme.radiusMd),
-                bottomLeft: Radius.circular(AppTheme.radiusMd),
-                bottomRight: Radius.circular(4),
-              ),
+              borderRadius: BorderRadius.circular(14),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 // Image (base64 veya URL)
-                if (message.imageBase64 != null) ...[
+                if (gorselBaytlari != null) ...[
                   ClipRRect(
                     borderRadius: BorderRadius.circular(AppTheme.radiusSm),
                     child: Stack(
                       alignment: Alignment.center,
                       children: [
                         Image.memory(
-                          base64Decode(message.imageBase64!),
+                          gorselBaytlari,
                           fit: BoxFit.contain,
                           width: double.infinity,
+                          // Yeniden çözüm sırasında eski kareyi TUT: yoksa
+                          // fotoğraf her yeniden kurulumda bir kare boşalıp
+                          // göz kırpıyor.
+                          gaplessPlayback: true,
+                          errorBuilder: (_, __, ___) => _gorselHatasi(context),
                         ),
                         // Yükleme sürerken hafif karartma + spinner
                         if (isSending) ...[
@@ -83,6 +103,9 @@ class UserMessageWidget extends StatelessWidget {
                       message.imageUrl!,
                       fit: BoxFit.contain,
                       width: double.infinity,
+                      // errorBuilder yoktu: geçmişteki görsel yüklenemeyince
+                      // konsola exception düşüyor, kullanıcı boş kutu görüyordu.
+                      errorBuilder: (_, __, ___) => _gorselHatasi(context),
                       loadingBuilder: (context, child, progress) {
                         if (progress == null) return child;
                         return Container(
@@ -101,12 +124,15 @@ class UserMessageWidget extends StatelessWidget {
 
                 // Text
                 if (message.text.isNotEmpty)
-                  Text(
-                    message.text,
-                    style: TextStyle(
-                      fontSize: 15,
-                      height: 1.5,
-                      color: context.textPrimary,
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Text(
+                      message.text,
+                      style: TextStyle(
+                        fontSize: 14.5,
+                        height: 1.5,
+                        color: context.textPrimary,
+                      ),
                     ),
                   ),
 
@@ -145,33 +171,17 @@ class UserMessageWidget extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
             decoration: BoxDecoration(
               color: context.userBubbleBg,
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(AppTheme.radiusMd),
-                topRight: Radius.circular(AppTheme.radiusMd),
-                bottomLeft: Radius.circular(AppTheme.radiusMd),
-                bottomRight: Radius.circular(4),
-              ),
+              borderRadius: BorderRadius.circular(14),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.task_alt_rounded, size: 14, color: context.textSecondary),
-                    const SizedBox(width: 6),
-                    Text(
-                      p.attempt != null && p.attempt! > 1
-                          ? 'Cevabın (${p.attempt}. deneme)'
-                          : 'Cevabın',
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w600,
-                        color: context.textSecondary,
-                      ),
-                    ),
-                  ],
+                Text(
+                  p.attempt != null && p.attempt! > 1
+                      ? 'Cevabın · ${p.attempt}. deneme'
+                      : 'Cevabın',
+                  style: context.mono(fontSize: 11, color: context.textSecondary),
                 ),
                 const SizedBox(height: 5),
                 Text(

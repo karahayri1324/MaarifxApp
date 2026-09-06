@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../config/theme.dart';
 import '../../screens/settings/privacy_policy_screen.dart';
+import 'ui_bits.dart';
 
 /// Sınıf seviyesi seçeneği (tek kaynak).
 class SinifSeviyesi {
@@ -95,46 +96,21 @@ class _SinifSeviyesiSheetState extends State<_SinifSeviyesiSheet> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(height: 8),
-            // Diğer sheet'lerdeki drag handle ile aynı ölçü/renk
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: context.borderColor,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
+            const SheetTutamac(),
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                      children: [
-                        Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: AppTheme.primary.withOpacity(0.1),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(Icons.school_outlined,
-                              color: AppTheme.primary, size: 22),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            _degistirme ? 'Sınıf seviyen' : 'Kaçıncı sınıftasın?',
-                            style: TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w600,
-                              color: context.textPrimary,
-                            ),
-                          ),
-                        ),
-                      ],
+                  Text(
+                    _degistirme ? 'Sınıf seviyen' : 'Kaçıncı sınıftasın?',
+                    style: TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: -0.2,
+                      color: context.textPrimary,
                     ),
+                  ),
                     const SizedBox(height: 12),
                     Text(
                       _degistirme
@@ -192,8 +168,8 @@ class _SinifSeviyesiSheetState extends State<_SinifSeviyesiSheet> {
                             const TextSpan(text: 'Devam ederek '),
                             TextSpan(
                               text: 'Gizlilik Politikası',
-                              style: const TextStyle(
-                                color: AppTheme.primary,
+                              style: TextStyle(
+                                color: context.blue,
                                 decoration: TextDecoration.underline,
                               ),
                               recognizer: _politikaTap,
@@ -249,11 +225,10 @@ class _SeviyeSatiri extends StatelessWidget {
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
-          color: secili ? AppTheme.primary.withOpacity(0.08) : Colors.transparent,
+          color: secili ? context.tint : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
-            color: secili ? AppTheme.primary : context.borderColor,
-            width: secili ? 1.5 : 1,
+            color: secili ? context.blue : context.borderColor,
           ),
         ),
         child: Row(
@@ -266,7 +241,7 @@ class _SeviyeSatiri extends StatelessWidget {
                     seviye.etiket,
                     style: TextStyle(
                       fontSize: 15,
-                      fontWeight: FontWeight.w600,
+                      fontWeight: secili ? FontWeight.w500 : FontWeight.w400,
                       color: context.textPrimary,
                     ),
                   ),
@@ -280,12 +255,18 @@ class _SeviyeSatiri extends StatelessWidget {
                 ],
               ),
             ),
-            if (secili)
-              const Icon(Icons.check_circle_rounded,
-                  size: 20, color: AppTheme.primary)
-            else
-              Icon(Icons.circle_outlined,
-                  size: 20, color: context.textMuted.withOpacity(0.6)),
+            Container(
+              key: secili ? const ValueKey('sinif_secili') : null,
+              width: 16,
+              height: 16,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: secili ? context.blue : context.textMuted,
+                  width: secili ? 5 : 1.5,
+                ),
+              ),
+            ),
           ],
         ),
       ),

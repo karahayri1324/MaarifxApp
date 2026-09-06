@@ -63,8 +63,6 @@ class AudioService {
     try {
       // Load new source if different
       if (_currentUrl != url) {
-        _currentUrl = url;
-
         AudioSource source;
         if (url.startsWith('http://') || url.startsWith('https://')) {
           source = AudioSource.uri(Uri.parse(url));
@@ -78,6 +76,11 @@ class AudioService {
         }
 
         await _player.setAudioSource(source);
+        // `_currentUrl` ancak kaynak GERÇEKTEN yüklendikten sonra yazılır.
+        // Önceden atamadan yükleniyordu: setAudioSource hata verirse url yine
+        // "yüklü" sayılıyor, ikinci `play` çağrısı kaynağı hiç yüklemeden
+        // çalmaya çalışıyor ve ses sessizce hiç gelmiyordu.
+        _currentUrl = url;
       }
 
       // Seek if needed

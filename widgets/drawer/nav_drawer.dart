@@ -6,7 +6,11 @@ import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../services/vds_service.dart';
 import '../../screens/settings/settings_screen.dart';
+import '../common/class_level_sheet.dart';
+import '../common/ui_bits.dart';
 
+/// Çekmece: yazı-logo + yeni sohbet kalemi, arama, tarihe göre gruplu düz
+/// satırlar, altta profil. Satırlarda ikon ve ok yok; açık sohbet tintli.
 class NavDrawer extends StatelessWidget {
   const NavDrawer({super.key});
 
@@ -21,155 +25,66 @@ class NavDrawer extends StatelessWidget {
       child: SafeArea(
         child: Column(
           children: [
-            // Header with Logo
-            Container(
-              padding: const EdgeInsets.all(20),
+            // Başlık: yazı-logo + yeni sohbet
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 12, 10),
               child: Row(
                 children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      color: context.bgPrimary,
-                      boxShadow: AppTheme.shadowSm,
-                    ),
-                    padding: const EdgeInsets.all(7),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(5),
-                      child: Image.asset(
-                        'assets/images/karahayri.png',
-                        fit: BoxFit.contain,
-                      ),
-                    ),
+                  Image.asset(
+                    context.wordmarkAsset,
+                    height: 22,
+                    fit: BoxFit.contain,
+                    filterQuality: FilterQuality.medium,
+                    semanticLabel: 'MaariFx',
                   ),
-                  const SizedBox(width: 14),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'MaariFx',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: context.textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 2,
-                        ),
+                  const Spacer(),
+                  Tooltip(
+                    message: 'Yeni sohbet',
+                    child: InkWell(
+                      onTap: () {
+                        chatProvider.startNewChat();
+                        Navigator.of(context).pop();
+                      },
+                      borderRadius: BorderRadius.circular(9),
+                      child: Container(
+                        width: 34,
+                        height: 34,
                         decoration: BoxDecoration(
-                          color: AppTheme.primary.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
+                          color: context.bgPrimary,
+                          borderRadius: BorderRadius.circular(9),
+                          border: Border.all(color: context.borderColor),
                         ),
-                        child: const Text(
-                          '3.0',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                            color: AppTheme.primary,
-                          ),
-                        ),
+                        child: Icon(Icons.edit_outlined, size: 17, color: context.textPrimary),
                       ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-
-            Divider(height: 1, color: context.borderColor),
-
-            // New Chat Button
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    chatProvider.startNewChat();
-                    Navigator.of(context).pop();
-                  },
-                  icon: const Icon(Icons.add_rounded, size: 22),
-                  label: const Text('Yeni Sohbet'),
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-
-            // Chats Section Title
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                children: [
-                  Icon(Icons.history_rounded,
-                      size: 16, color: context.textSecondary),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Sohbet Gecmisi',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: context.textSecondary,
-                      letterSpacing: 0.5,
                     ),
                   ),
                 ],
               ),
             ),
 
-            // Chat List
+            // Sohbet listesi (arama + gruplar)
             Expanded(
               child: _ChatHistoryList(userId: user?.uid),
             ),
 
-            Divider(height: 1, color: context.borderColor),
-
-            // User Account Section
-            if (user != null)
+            // Profil satırı → Ayarlar
+            if (user != null) ...[
+              Divider(height: 1, color: context.borderColor),
               Material(
                 color: Colors.transparent,
                 child: InkWell(
                   onTap: () {
-                    Navigator.of(context).pop(); // Drawer'ı kapat
+                    Navigator.of(context).pop(); // çekmeceyi kapat
                     Navigator.of(context).push(
                       MaterialPageRoute(builder: (_) => const SettingsScreen()),
                     );
                   },
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 14, 14),
                     child: Row(
                       children: [
-                        Container(
-                          width: 42,
-                          height: 42,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [AppTheme.primary, AppTheme.primaryDark],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Center(
-                            child: Text(
-                              user.initials,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 16,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
+                        BasHarfDairesi(harfler: user.initials),
+                        const SizedBox(width: 10),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -177,8 +92,8 @@ class NavDrawer extends StatelessWidget {
                               Text(
                                 user.displayNameOrEmail,
                                 style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w500,
                                   color: context.textPrimary,
                                 ),
                                 maxLines: 1,
@@ -186,40 +101,36 @@ class NavDrawer extends StatelessWidget {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                user.email,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: context.textSecondary,
-                                ),
+                                _altSatir(user.classLevel, user.email),
+                                style: context.mono(fontSize: 11),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ],
                           ),
                         ),
-                        Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: BoxDecoration(
-                            color: context.bgTertiary,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Icon(
-                            Icons.chevron_right_rounded,
-                            color: context.textSecondary,
-                            size: 20,
-                          ),
-                        ),
+                        Icon(Icons.settings_outlined, size: 18, color: context.textMuted),
                       ],
                     ),
                   ),
                 ),
               ),
+            ],
           ],
         ),
       ),
     );
   }
 
+  /// Profil altında sınıf; sınıf yoksa e-posta.
+  static String _altSatir(String? classLevel, String email) {
+    final n = normalizeSinifSeviyesi(classLevel);
+    if (n != null) {
+      final s = kSinifSeviyeleri.where((x) => x.deger == n);
+      if (s.isNotEmpty) return s.first.etiket.replaceAll('Sınıf', 'sınıf');
+    }
+    return email;
+  }
 }
 
 class _ChatHistoryList extends StatefulWidget {
@@ -312,15 +223,7 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
     }
   }
 
-  /// Sohbeti GERÇEKTEN siler.
-  ///
-  /// Eskiden burası yalnızca id'yi cihazdaki `hidden_conversation_ids`
-  /// listesine yazıyordu: sohbet sunucuda olduğu gibi duruyor, kullanıcı
-  /// yeni bir cihaza girdiğinde "sildiği" her şey geri geliyordu — ve
-  /// öğrenci verisi hiçbir zaman silinmiyordu. `deleteConversation` API'si
-  /// yazılmış ama hiç çağrılmamıştı. Artık önce onay alınır, sonra sunucudan
-  /// silinir; silme başarısızsa liste DEĞİŞMEZ ve kullanıcıya söylenir
-  /// (sessizce "silindi" gösterip aslında saklamak en kötüsüydü).
+  /// Sohbeti GERÇEKTEN siler (önce onay; silme başarısızsa liste değişmez).
   Future<void> _deleteConversation(String conversationId) async {
     final onay = await showDialog<bool>(
       context: context,
@@ -337,7 +240,7 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
+            style: TextButton.styleFrom(foregroundColor: ctx.pen),
             child: const Text('Sil'),
           ),
         ],
@@ -352,8 +255,6 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
     if (!silindi) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Sohbet silinemedi. Bağlantını kontrol edip tekrar dene.'),
-        backgroundColor: AppTheme.danger,
-        behavior: SnackBarBehavior.floating,
       ));
       return;
     }
@@ -368,39 +269,26 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
     });
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
       content: Text('Sohbet silindi'),
-      behavior: SnackBarBehavior.floating,
     ));
   }
 
   void _showDeleteSheet(BuildContext context, ConversationSummary conv) {
     showModalBottomSheet(
       context: context,
-      backgroundColor: context.bgPrimary,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 36,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 12),
-                decoration: BoxDecoration(
-                  color: context.borderColor,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
+              const SheetTutamac(),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
                 child: Text(
                   conv.title,
                   style: TextStyle(
                     fontSize: 14,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w500,
                     color: context.textPrimary,
                   ),
                   maxLines: 1,
@@ -409,12 +297,8 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
               ),
               const SizedBox(height: 4),
               ListTile(
-                leading: const Icon(Icons.delete_outline_rounded,
-                    color: AppTheme.danger),
-                title: const Text(
-                  'Sohbeti Sil',
-                  style: TextStyle(color: AppTheme.danger),
-                ),
+                leading: Icon(Icons.delete_outline_rounded, color: ctx.pen),
+                title: Text('Sohbeti sil', style: TextStyle(color: ctx.pen)),
                 onTap: () {
                   Navigator.pop(ctx);
                   _deleteConversation(conv.id);
@@ -427,26 +311,33 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
     );
   }
 
+  /// Tarih grubu: Bugün / Dün / Bu hafta / Daha eski.
+  static String _grup(DateTime t, DateTime simdi) {
+    final bugun = DateTime(simdi.year, simdi.month, simdi.day);
+    final gun = DateTime(t.year, t.month, t.day);
+    final fark = bugun.difference(gun).inDays;
+    if (fark <= 0) return 'Bugün';
+    if (fark == 1) return 'Dün';
+    if (fark < 7) return 'Bu hafta';
+    if (fark < 30) return 'Bu ay';
+    return 'Daha eski';
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.userId == null) {
       return Center(
-        child: Text(
-          'Giriş yapınız',
-          style: TextStyle(color: context.textMuted),
-        ),
+        child: Text('Giriş yapınca sohbetlerin burada görünür',
+            style: TextStyle(color: context.textMuted, fontSize: 13)),
       );
     }
 
     if (_isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(strokeWidth: 2),
-      );
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
     }
 
-    final allConversations = _conversations
-        .where((c) => !_hiddenIds.contains(c.id))
-        .toList();
+    final allConversations =
+        _conversations.where((c) => !_hiddenIds.contains(c.id)).toList();
 
     final conversations = _searchQuery.isEmpty
         ? allConversations
@@ -455,75 +346,98 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
                 c.title.toLowerCase().contains(_searchQuery.toLowerCase()))
             .toList();
 
+    // Düz liste: grup başlığı (String) ya da sohbet (ConversationSummary)
+    final simdi = DateTime.now();
+    final ogeler = <Object>[];
+    String? sonGrup;
+    for (final c in conversations) {
+      final g = _grup(c.updatedAt.toLocal(), simdi);
+      if (g != sonGrup) {
+        ogeler.add(g);
+        sonGrup = g;
+      }
+      ogeler.add(c);
+    }
+    final acikId = context.select<ChatProvider, String?>((p) => p.currentConversationId);
+
     return Column(
       children: [
-        // Search field
+        // Arama
         Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          padding: const EdgeInsets.fromLTRB(12, 2, 12, 6),
+          child: SizedBox(
+            height: 36,
             child: TextField(
               controller: _searchController,
               onChanged: (value) => setState(() => _searchQuery = value),
               style: TextStyle(fontSize: 13, color: context.textPrimary),
               decoration: InputDecoration(
-                hintText: 'Sohbet ara...',
+                hintText: 'Sohbetlerde ara',
                 hintStyle: TextStyle(fontSize: 13, color: context.textMuted),
-                prefixIcon: Icon(Icons.search_rounded,
-                    size: 18, color: context.textMuted),
+                prefixIcon: Icon(Icons.search_rounded, size: 17, color: context.textMuted),
+                prefixIconConstraints: const BoxConstraints(minWidth: 34, minHeight: 0),
                 suffixIcon: _searchQuery.isNotEmpty
-                    ? GestureDetector(
-                        onTap: () {
+                    ? IconButton(
+                        onPressed: () {
                           _searchController.clear();
                           setState(() => _searchQuery = '');
                         },
-                        child: Icon(Icons.close_rounded,
-                            size: 18, color: context.textMuted),
+                        icon: Icon(Icons.close_rounded, size: 16, color: context.textMuted),
                       )
                     : null,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                 filled: true,
-                fillColor: context.bgTertiary,
+                fillColor: context.bgPrimary,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide.none,
+                  borderSide: BorderSide(color: context.borderColor),
                 ),
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide.none,
+                  borderSide: BorderSide(color: context.borderColor),
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide:
-                      const BorderSide(color: AppTheme.primary, width: 1),
+                  borderSide: BorderSide(color: context.blue, width: 1.2),
                 ),
               ),
             ),
           ),
+        ),
 
-        // Conversation list
+        // Liste
         Expanded(
           child: conversations.isEmpty
               ? _buildEmptyState(context, allConversations.isEmpty)
               : ListView.builder(
                   controller: _searchQuery.isEmpty ? _scrollController : null,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  itemCount: conversations.length + (_isLoadingMore ? 1 : 0),
+                  padding: const EdgeInsets.fromLTRB(6, 2, 6, 8),
+                  itemCount: ogeler.length + (_isLoadingMore ? 1 : 0),
                   itemBuilder: (context, index) {
-                    if (index >= conversations.length) {
+                    if (index >= ogeler.length) {
                       return const Padding(
                         padding: EdgeInsets.all(16),
                         child: Center(
                           child: SizedBox(
-                            width: 20,
-                            height: 20,
+                            width: 18,
+                            height: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           ),
                         ),
                       );
                     }
-                    final conv = conversations[index];
+                    final o = ogeler[index];
+                    if (o is String) {
+                      return Padding(
+                        padding: EdgeInsets.fromLTRB(10, index == 0 ? 6 : 14, 10, 4),
+                        child: Text(trBuyuk(o), style: context.eyebrow),
+                      );
+                    }
+                    final conv = o as ConversationSummary;
                     return _ChatListItem(
                       conversation: conv,
+                      acik: conv.id == acikId,
                       onLongPress: () => _showDeleteSheet(context, conv),
                     );
                   },
@@ -537,44 +451,12 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: context.bgTertiary,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Icon(
-                noConversationsAtAll
-                    ? Icons.chat_bubble_outline_rounded
-                    : Icons.search_off_rounded,
-                size: 36,
-                color: context.textMuted,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              noConversationsAtAll ? 'Henüz sohbet yok' : 'Sonuç bulunamadı',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-                color: context.textMuted,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              noConversationsAtAll
-                  ? 'Yeni bir sohbet baslatmak icin\nyukardaki butonu kullanin'
-                  : 'Farkli bir arama terimi deneyin',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 12,
-                color: context.textMuted,
-              ),
-            ),
-          ],
+        child: Text(
+          noConversationsAtAll
+              ? 'Henüz sohbet yok.\nİlk sorunu sorunca burada görünür.'
+              : 'Sonuç yok',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 13, height: 1.5, color: context.textMuted),
         ),
       ),
     );
@@ -583,60 +465,39 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
 
 class _ChatListItem extends StatelessWidget {
   final ConversationSummary conversation;
+  final bool acik;
   final VoidCallback? onLongPress;
 
-  const _ChatListItem({required this.conversation, this.onLongPress});
+  const _ChatListItem({
+    required this.conversation,
+    required this.acik,
+    this.onLongPress,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 4),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () {
-            final chatProvider = context.read<ChatProvider>();
-            chatProvider.loadConversation(conversation.id);
-            Navigator.of(context).pop();
-          },
-          onLongPress: onLongPress,
-          borderRadius: BorderRadius.circular(12),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: context.bgTertiary,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    Icons.chat_bubble_outline_rounded,
-                    size: 16,
-                    color: context.textSecondary,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    conversation.title,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                      color: context.textPrimary,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                Icon(
-                  Icons.chevron_right_rounded,
-                  size: 18,
-                  color: context.textMuted,
-                ),
-              ],
+    return Material(
+      color: acik ? context.tint : Colors.transparent,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        onTap: () {
+          final chatProvider = context.read<ChatProvider>();
+          chatProvider.loadConversation(conversation.id);
+          Navigator.of(context).pop();
+        },
+        onLongPress: onLongPress,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          child: Text(
+            conversation.title,
+            style: TextStyle(
+              fontSize: 13.5,
+              fontWeight: acik ? FontWeight.w500 : FontWeight.w400,
+              color: context.textPrimary,
             ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ),
       ),

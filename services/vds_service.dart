@@ -20,6 +20,7 @@ enum VdsMessageType {
   requestComplete,
   requestError,
   notice,          // AÇIK UÇLU sunucu bildirimi (kota/ban/duyuru…) — sebep app'te TANIMLI DEĞİL
+  thumbnailReady,  // çizimli çözümün küçük resmi hazır (sunucu sonradan üretir)
   ping,
   pong,
   unknown,
@@ -107,6 +108,7 @@ class VdsMessageData {
   final List<dynamic>? sessionAudioCommands;
   final List<dynamic>? sessionRenderedSteps;
   final int? sessionDuration;
+  final String? thumbnailUrl;
   final String? resultImagePath;
   final bool? drawOnImage; // null = eski kayıt (bilinmiyor), true = çizimli, false = sözel
   final DateTime createdAt;
@@ -124,6 +126,7 @@ class VdsMessageData {
     this.sessionAudioCommands,
     this.sessionRenderedSteps,
     this.sessionDuration,
+    this.thumbnailUrl,
     this.resultImagePath,
     this.drawOnImage,
     required this.createdAt,
@@ -155,6 +158,7 @@ class VdsMessageData {
               : json['session_rendered_steps'])
           : null,
       sessionDuration: json['session_duration'] as int?,
+      thumbnailUrl: json['thumbnail_url'] as String?,
       resultImagePath: json['result_image_path'] as String?,
       drawOnImage: json['draw_on_image'] != null
           ? (json['draw_on_image'] == 1 || json['draw_on_image'] == true)
@@ -242,6 +246,12 @@ class ConversationModeLockedException implements Exception {
 
 // ─── VDS Service ───
 class VdsService {
+  /// WebSocket tabanı. Üretimde daima [AppConfig.wsUrl]; yalnız testler
+  /// yerel bir sunucuya yönlendirmek için bunu geçer.
+  final String? wsUrlOverride;
+
+  VdsService({this.wsUrlOverride});
+
   String? _authToken;
   WebSocketChannel? _channel;
   bool _isConnected = false;
@@ -760,11 +770,35 @@ class VdsService {
       }
     }
 
-    final wsUrl = '${AppConfig.wsUrl}${AppConfig.wsEndpoint(_authToken!)}';
+    final wsUrl =
+        '${wsUrlOverride ?? AppConfig.wsUrl}${AppConfig.wsEndpoint(_authToken!)}';
 
     try {
       final channel = WebSocketChannel.connect(Uri.parse(wsUrl));
       _channel = channel;
+
+      // BU DENEMEYE ÖZEL KOPMA BAYRAĞI. İki ayrı işi birden yapar:
+      //
+      //  1. `onError` ve `onDone` başarısız bir bağlantıda İKİSİ DE gelir.
+      //     İkisinin de `_handleDisconnect` çağırması `_reconnectAttempt`i iki
+      //     kat hızlı büyütüyor, backoff olması gerekenden erken 60 sn'ye
+      //     tırmanıyordu.
+      //  2. Aşağıdaki 500 ms'lik iyimser "bağlandım" adımı, bağlantı bu arada
+      //     DÜŞMÜŞ olsa bile çalışıyordu: `_handleDisconnect` `_channel`ı
+      //     null'a çekmediği için `_channel == channel` hâlâ doğruydu. Sonuç:
+      //     `_isConnected = true` yalanı → 3 sn'lik yeniden bağlanma
+      //     zamanlayıcısı `if (!_isConnected)` şartında düşüyor → yeniden
+      //     bağlanma HİÇ denenmiyor. Kurtarma ancak 30 sn'lik ping ya da
+      //     75 sn'lik ölü soket eşiğinde geliyordu; o süre boyunca uygulama
+      //     "bağlı" görünüp tek mesaj alamıyordu (VDS her yeniden
+      //     başlatıldığında yaşanan senaryo).
+      var koptu = false;
+      void kopmaBildir() {
+        if (koptu) return;
+        koptu = true;
+        if (_channel != channel) return; // stale kanal — sahibi zaten devretti
+        _handleDisconnect();
+      }
 
       channel.stream.listen(
         (message) {
@@ -777,16 +811,13 @@ class VdsService {
           }
           _handleMessage(message);
         },
-        onError: (error) {
-          if (_channel == channel) _handleDisconnect();
-        },
-        onDone: () {
-          if (_channel == channel) _handleDisconnect();
-        },
+        onError: (error) => kopmaBildir(),
+        onDone: kopmaBildir,
       );
 
       // Bağlantı bekleme
       Future.delayed(const Duration(milliseconds: 500), () {
+        if (koptu) return; // bu deneme çoktan düştü — "bağlandı" deme
         if (_channel == channel && !_isConnected && !_isDisposed) {
           _isConnected = true;
           // Backoff sayacı BURADA da sıfırlanmalı. Sıfırlama yalnız ilk mesaj
@@ -840,6 +871,8 @@ class VdsService {
         return VdsMessageType.requestError;
       case 'notice':
         return VdsMessageType.notice;
+      case 'thumbnail_ready':
+        return VdsMessageType.thumbnailReady;
       case 'ping':
         return VdsMessageType.ping;
       case 'pong':

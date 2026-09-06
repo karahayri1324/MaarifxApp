@@ -7,6 +7,7 @@ import '../../providers/theme_provider.dart';
 import '../../models/user_model.dart';
 import '../chat/chat_screen.dart';
 import 'privacy_policy_screen.dart';
+import '../../widgets/common/ui_bits.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -109,7 +110,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // Sessiz fail olmasın — kullanıcı seçiminin kaydedilmediğini bilsin
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Sınıf seviyesi güncellenemedi. Lütfen tekrar deneyin.'),
+          content: Text('Sınıf güncellenemedi. Tekrar dene.'),
           backgroundColor: AppTheme.danger,
         ),
       );
@@ -121,12 +122,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final submitted = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Hata Bildir'),
+        title: const Text('Hata bildir'),
         content: TextField(
           controller: controller,
           maxLines: 4,
           decoration: const InputDecoration(
-            hintText: 'Karşılaştığınız sorunu açıklayınız...',
+            hintText: 'Sorunu kısaca anlat…',
             border: OutlineInputBorder(),
           ),
         ),
@@ -152,7 +153,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           SnackBar(
             content: Text(success
                 ? 'Hata raporu gönderildi. Teşekkürler!'
-                : 'Gönderme başarısız oldu. Lütfen tekrar deneyin.'),
+                : 'Gönderilemedi. Tekrar dene.'),
           ),
         );
       }
@@ -164,9 +165,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Hesabı Sil'),
+        title: const Text('Hesabı sil'),
         content: const Text(
-          'Hesabınız ve tüm verileriniz kalıcı olarak silinecektir. Bu işlem geri alınamaz.',
+          'Hesabın ve tüm verilerin kalıcı olarak silinir. Bu işlem geri alınamaz.',
         ),
         actions: [
           TextButton(
@@ -175,8 +176,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
-            child: const Text('Hesabı Sil'),
+            style: TextButton.styleFrom(foregroundColor: ctx.pen),
+            child: const Text('Hesabı sil'),
           ),
         ],
       ),
@@ -196,8 +197,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('Hesabınız başarıyla silindi'),
-                backgroundColor: AppTheme.success,
+                content: Text('Hesabın silindi'),
               ),
             );
             Navigator.of(context).pushAndRemoveUntil(
@@ -221,9 +221,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Çıkış Yap'),
-        content:
-            const Text('Hesabınızdan çıkmak istediğinizden emin misiniz?'),
+        title: const Text('Çıkış yap'),
+        content: const Text('Hesabından çıkmak istiyor musun?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -231,8 +230,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
-            child: const Text('Çıkış Yap'),
+            child: const Text('Çıkış yap'),
           ),
         ],
       ),
@@ -260,95 +258,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       backgroundColor: context.bgSecondary,
       appBar: AppBar(
-        backgroundColor: context.bgPrimary,
-        surfaceTintColor: Colors.transparent,
         title: const Text('Ayarlar'),
-        elevation: 0,
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(color: context.borderColor, height: 0.5),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
+          onPressed: () => Navigator.of(context).pop(),
         ),
       ),
       body: Consumer2<AuthProvider, ChatProvider>(
         builder: (context, authProvider, chatProvider, _) {
           final user = authProvider.user;
           return ListView(
-            padding: EdgeInsets.zero,
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 40),
             children: [
-              const SizedBox(height: 20),
+              if (user != null) _profil(context, user),
 
-              // ── Profile ──
-              if (user != null) _buildProfileTile(context, user),
-
-              const SizedBox(height: 28),
-
-              // ── Hesap ──
-              _sectionLabel(context, 'Hesap'),
-              _cardGroup(context, [
+              _grupBaslik(context, 'Hesap'),
+              _grup(context, [
                 if (user != null) ...[
-                  // Kullanıcı adı — öğretmenin hitap ettiği ad
-                  _tileTap(
+                  _satir(
                     context,
-                    icon: Icons.badge_outlined,
-                    title: 'Kullanıcı Adı',
-                    subtitle: (user.displayName ?? '').trim().isEmpty
-                        ? 'Öğretmenin sana nasıl hitap etsin?'
+                    baslik: 'Ad',
+                    deger: (user.displayName ?? '').trim().isEmpty
+                        ? 'Ekle'
                         : user.displayName!,
-                    trailing: Icon(Icons.chevron_right_rounded,
-                        color: context.textMuted, size: 22),
                     onTap: () => _editDisplayName(context),
                   ),
-                  _divider(context),
-                  if (user.schoolName != null && user.schoolName!.isNotEmpty) ...[
-                    _tile(
-                      context,
-                      icon: Icons.school_outlined,
-                      title: 'Kurum',
-                      subtitle: 'Kayıtlı olduğunuz kurum',
-                      value: user.schoolName!,
-                    ),
-                    _divider(context),
-                  ],
-                  _tile(
+                  if (user.schoolName != null && user.schoolName!.isNotEmpty)
+                    _satir(context, baslik: 'Kurum', deger: user.schoolName!),
+                  _satir(
                     context,
-                    icon: Icons.auto_stories_outlined,
-                    title: 'Sınıf',
-                    subtitle: 'Çözümler sınıf seviyenize göre uyarlanır',
-                    child: _classDropdown(context, user),
+                    baslik: 'Sınıf',
+                    trailing: _classDropdown(context, user),
                   ),
-                  _divider(context),
                 ],
-                _tileTap(
+                _satir(
                   context,
-                  icon: Icons.lock_outline_rounded,
-                  title: 'Şifre Değiştir',
-                  subtitle: 'Hesap güvenliğiniz için şifrenizi güncelleyin',
+                  baslik: 'Şifre',
+                  deger: 'Değiştir',
                   trailing: AnimatedRotation(
                     turns: _passwordExpanded ? 0.5 : 0,
                     duration: const Duration(milliseconds: 200),
                     child: Icon(Icons.expand_more_rounded,
-                        color: context.textMuted, size: 22),
+                        size: 18, color: context.textMuted),
                   ),
                   onTap: () =>
                       setState(() => _passwordExpanded = !_passwordExpanded),
                 ),
-                _passwordForm(context),
-              ]),
+              ], ek: _passwordForm(context)),
 
-              const SizedBox(height: 28),
-
-              // ── Görünüm ──
-              _sectionLabel(context, 'Görünüm'),
-              _cardGroup(context, [
+              _grupBaslik(context, 'Görünüm'),
+              _grup(context, [
                 Consumer<ThemeProvider>(
                   builder: (context, themeProvider, _) {
-                    return _tileTap(
+                    return _satir(
                       context,
-                      icon: themeProvider.isDarkMode
-                          ? Icons.dark_mode_rounded
-                          : Icons.light_mode_rounded,
-                      title: 'Karanlık Mod',
-                      subtitle: 'Göz yorgunluğunu azaltmak için karanlık tema',
+                      baslik: 'Karanlık mod',
                       trailing: Switch(
                         value: themeProvider.isDarkMode,
                         onChanged: (_) => themeProvider.toggleTheme(),
@@ -359,50 +323,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ]),
 
-              const SizedBox(height: 28),
-
-              // ── Öğretmen ──
-              _sectionLabel(context, 'Öğretmen'),
-              _cardGroup(context, [
-                _tile(
+              _grupBaslik(context, 'Öğretmen'),
+              _grup(context, [
+                _satir(
                   context,
-                  icon: Icons.favorite_outline_rounded,
-                  title: 'Samimiyet',
-                  subtitle: 'Öğretmen seninle ne kadar samimi konuşsun',
-                  child: _samimiyetDropdown(context, chatProvider),
+                  baslik: 'Samimiyet',
+                  trailing: _samimiyetDropdown(context, chatProvider),
                 ),
-                _divider(context),
-                _tileTap(
+                _satir(
                   context,
-                  icon: Icons.person_outline_rounded,
-                  title: 'Kendini Tanıt',
-                  subtitle: chatProvider.studentIntro.isEmpty
-                      ? 'Öğretmen seni tanısın diye birkaç kelime'
+                  baslik: 'Kendini tanıt',
+                  deger: chatProvider.studentIntro.isEmpty
+                      ? 'Ekle'
                       : chatProvider.studentIntro,
-                  trailing: Icon(Icons.chevron_right_rounded,
-                      color: context.textMuted, size: 22),
                   onTap: () => _editIntro(context, chatProvider),
                 ),
               ]),
 
-              const SizedBox(height: 28),
-
-              // ── Diğer ──
-              _sectionLabel(context, 'Diğer'),
-              _cardGroup(context, [
-                _tileTap(
+              _grupBaslik(context, 'Diğer'),
+              _grup(context, [
+                _satir(context, baslik: 'Hata bildir', onTap: _submitBugReport),
+                _satir(
                   context,
-                  icon: Icons.flag_outlined,
-                  title: 'Hata Bildir',
-                  subtitle: 'Karşılaştığınız sorunları bize bildirin',
-                  onTap: _submitBugReport,
-                ),
-                _divider(context),
-                _tileTap(
-                  context,
-                  icon: Icons.description_outlined,
-                  title: 'Gizlilik Politikası',
-                  subtitle: 'Verilerinizin nasıl korunduğunu öğrenin',
+                  baslik: 'Gizlilik politikası',
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(builder: (_) => const PrivacyPolicyScreen()),
@@ -411,40 +354,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ]),
 
-              const SizedBox(height: 28),
-
-              // ── Cikis ──
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: _tileTap(
+              _grupBaslik(context, 'Hesap işlemleri'),
+              _grup(context, [
+                _satir(context, baslik: 'Çıkış yap', onTap: _handleLogout, okGoster: false),
+                _satir(
                   context,
-                  icon: Icons.logout_rounded,
-                  title: 'Çıkış Yap',
-                  iconColor: AppTheme.danger,
-                  titleColor: AppTheme.danger,
-                  standalone: true,
-                  onTap: _handleLogout,
-                ),
-              ),
-
-              const SizedBox(height: 12),
-
-              // ── Hesabi Sil ──
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: _tileTap(
-                  context,
-                  icon: Icons.delete_forever_rounded,
-                  title: 'Hesabı Sil',
-                  subtitle: 'Hesabınızı ve tüm verilerinizi kalıcı olarak silin',
-                  iconColor: AppTheme.danger,
-                  titleColor: AppTheme.danger,
-                  standalone: true,
+                  baslik: 'Hesabı sil',
                   onTap: _handleDeleteAccount,
+                  tehlike: true,
+                  okGoster: false,
                 ),
-              ),
-
-              const SizedBox(height: 40),
+              ]),
             ],
           );
         },
@@ -453,256 +373,130 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   // ─────────────────────────────────────────────────────
-  // Profile
+  // Parçalar: profil, grup, satır
   // ─────────────────────────────────────────────────────
 
-  Widget _buildProfileTile(BuildContext context, UserModel user) {
+  Widget _profil(BuildContext context, UserModel user) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: context.bgPrimary,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: context.borderColor, width: 0.5),
-        ),
+      padding: const EdgeInsets.fromLTRB(0, 10, 0, 8),
+      child: Row(
+        children: [
+          BasHarfDairesi(harfler: user.initials, size: 44),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  user.displayNameOrEmail,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                    color: context.textPrimary,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  user.email,
+                  style: TextStyle(fontSize: 12.5, color: context.textSecondary),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _grupBaslik(BuildContext context, String text) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(2, 18, 2, 6),
+      child: Text(trBuyuk(text), style: context.eyebrow),
+    );
+  }
+
+  /// Yüzey rengi, 1 px kenarlık, köşe 12; satırlar arasında ince çizgi.
+  /// [ek] açılır/kapanır içerik (şifre formu): kendi çizgisini kendi çizer.
+  Widget _grup(BuildContext context, List<Widget> satirlar, {Widget? ek}) {
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: context.bgPrimary,
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+        border: Border.all(color: context.borderColor),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < satirlar.length; i++) ...[
+            if (i > 0) Container(height: 1, color: context.borderColor),
+            satirlar[i],
+          ],
+          if (ek != null) ek,
+        ],
+      ),
+    );
+  }
+
+  /// Satır: solda başlık, sağda değer ya da kontrol. İkon ve alt yazı yok.
+  Widget _satir(
+    BuildContext context, {
+    required String baslik,
+    String? deger,
+    Widget? trailing,
+    VoidCallback? onTap,
+    bool tehlike = false,
+    bool okGoster = true,
+  }) {
+    final icerik = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 46),
         child: Row(
           children: [
-            // Avatar
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [AppTheme.primary, AppTheme.primaryDark],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Center(
-                child: Text(
-                  user.initials,
-                  style: const TextStyle(
-                    fontSize: 19,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 14),
-            // Info
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    user.displayNameOrEmail,
-                    style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w600,
-                      color: context.textPrimary,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    user.email,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: context.textSecondary,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
+              child: Text(
+                baslik,
+                style: TextStyle(
+                  fontSize: 14.5,
+                  color: tehlike ? context.pen : context.textPrimary,
+                ),
               ),
             ),
+            if (deger != null)
+              Flexible(
+                child: Text(
+                  deger,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: TextStyle(fontSize: 13.5, color: context.textSecondary),
+                ),
+              ),
+            if (trailing != null) ...[
+              const SizedBox(width: 8),
+              trailing,
+            ] else if (onTap != null && okGoster) ...[
+              const SizedBox(width: 6),
+              Icon(Icons.chevron_right_rounded, size: 18, color: context.textMuted),
+            ],
           ],
         ),
       ),
     );
-  }
-
-  // ─────────────────────────────────────────────────────
-  // Shared pieces
-  // ─────────────────────────────────────────────────────
-
-  Widget _sectionLabel(BuildContext context, String text) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 32, bottom: 6),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w500,
-          color: context.textSecondary,
-        ),
-      ),
-    );
-  }
-
-  Widget _cardGroup(BuildContext context, List<Widget> children) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Container(
-        decoration: BoxDecoration(
-          color: context.bgPrimary,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: context.borderColor, width: 0.5),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(14),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: children,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _divider(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 52),
-      child: Container(height: 0.5, color: context.borderColor),
-    );
-  }
-
-  // Static info tile
-  Widget _tile(
-    BuildContext context, {
-    required IconData icon,
-    required String title,
-    String? subtitle,
-    String? value,
-    Widget? child,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Row(
-        children: [
-          Icon(icon, size: 20, color: context.textSecondary),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 15,
-                    color: context.textPrimary,
-                  ),
-                ),
-                if (subtitle != null) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: context.textMuted,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          if (child != null) child,
-          if (value != null)
-            Flexible(
-              child: Text(
-                value,
-                style: TextStyle(fontSize: 14, color: context.textSecondary),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.end,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  // Tappable tile
-  Widget _tileTap(
-    BuildContext context, {
-    required IconData icon,
-    required String title,
-    String? subtitle,
-    Widget? trailing,
-    Color? iconColor,
-    Color? titleColor,
-    bool standalone = false,
-    VoidCallback? onTap,
-  }) {
-    final content = Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-      child: Row(
-        children: [
-          Icon(icon, size: 20, color: iconColor ?? context.textSecondary),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 15,
-                    color: titleColor ?? context.textPrimary,
-                  ),
-                ),
-                if (subtitle != null) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: context.textMuted,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          if (trailing != null)
-            trailing
-          else
-            Icon(Icons.chevron_right_rounded,
-                size: 20, color: context.textMuted),
-        ],
-      ),
-    );
-
-    if (standalone) {
-      return Container(
-        decoration: BoxDecoration(
-          color: context.bgPrimary,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: context.borderColor, width: 0.5),
-        ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(14),
-            child: content,
-          ),
-        ),
-      );
-    }
-
+    if (onTap == null) return icerik;
     return Material(
       color: Colors.transparent,
-      child: InkWell(onTap: onTap, child: content),
+      child: InkWell(onTap: onTap, child: icerik),
     );
   }
 
   // ─────────────────────────────────────────────────────
-  // Class dropdown
+  // Açılır listeler
   // ─────────────────────────────────────────────────────
 
   Widget _classDropdown(BuildContext context, UserModel user) {
@@ -716,13 +510,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       value: cl,
       underline: const SizedBox(),
       isDense: true,
-      style: TextStyle(fontSize: 14, color: context.textSecondary),
-      icon: Icon(Icons.unfold_more_rounded,
-          size: 18, color: context.textMuted),
+      borderRadius: BorderRadius.circular(10),
+      dropdownColor: context.bgPrimary,
+      style: TextStyle(fontSize: 13.5, color: context.textSecondary, fontFamily: AppTheme.fontSans),
+      icon: Icon(Icons.keyboard_arrow_down_rounded, size: 17, color: context.textMuted),
       items: const [
-        DropdownMenuItem(value: '8', child: Text('8. Sınıf')),
-        DropdownMenuItem(value: '9', child: Text('9. Sınıf')),
-        DropdownMenuItem(value: '10', child: Text('10. Sınıf')),
+        DropdownMenuItem(value: '8', child: Text('8. sınıf')),
+        DropdownMenuItem(value: '9', child: Text('9. sınıf')),
+        DropdownMenuItem(value: '10', child: Text('10. sınıf')),
         DropdownMenuItem(value: 'TYT/AYT', child: Text('TYT/AYT')),
       ],
       onChanged: _updateClassLevel,
@@ -740,8 +535,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       value: secili,
       underline: const SizedBox(),
       isDense: true,
-      style: TextStyle(fontSize: 14, color: context.textSecondary),
-      icon: Icon(Icons.unfold_more_rounded, size: 18, color: context.textMuted),
+      borderRadius: BorderRadius.circular(10),
+      dropdownColor: context.bgPrimary,
+      style: TextStyle(fontSize: 13.5, color: context.textSecondary, fontFamily: AppTheme.fontSans),
+      icon: Icon(Icons.keyboard_arrow_down_rounded, size: 17, color: context.textMuted),
       items: [
         const DropdownMenuItem(value: 1, child: Text('Resmî')),
         const DropdownMenuItem(value: 2, child: Text('Dengeli')),
@@ -763,7 +560,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final sonuc = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Kullanıcı Adı'),
+        title: const Text('Ad'),
         content: TextField(
           controller: controller,
           autofocus: true,
@@ -814,12 +611,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context.read<ChatProvider>().setDisplayName(ad);
       setState(() {});
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Kullanıcı adın güncellendi')),
+        const SnackBar(content: Text('Adın güncellendi')),
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Kullanıcı adı güncellenemedi. Tekrar deneyin.'),
+          content: Text('Ad güncellenemedi. Tekrar dene.'),
           backgroundColor: AppTheme.danger,
         ),
       );
@@ -831,7 +628,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final result = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Kendini Tanıt'),
+        title: const Text('Kendini tanıt'),
         content: TextField(
           controller: controller,
           maxLines: 4,
@@ -862,78 +659,59 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   // ─────────────────────────────────────────────────────
-  // Password form
+  // Şifre formu (satırın altında açılır)
   // ─────────────────────────────────────────────────────
 
   Widget _passwordForm(BuildContext context) {
     return AnimatedSize(
-      duration: const Duration(milliseconds: 250),
+      duration: const Duration(milliseconds: 220),
       curve: Curves.easeInOut,
       child: !_passwordExpanded
           ? const SizedBox.shrink()
-          : Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: Column(
-                children: [
-                  Container(height: 0.5, color: context.borderColor),
-                  const SizedBox(height: 14),
-                  _pwField(_currentPasswordController, 'Mevcut Şifre'),
-                  const SizedBox(height: 10),
-                  _pwField(_newPasswordController, 'Yeni Şifre'),
-                  const SizedBox(height: 10),
-                  _pwField(_confirmPasswordController, 'Yeni Şifre (Tekrar)'),
-                  if (_passwordMessage != null) ...[
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Icon(
-                          _passwordSuccess
-                              ? Icons.check_circle_outline_rounded
-                              : Icons.info_outline_rounded,
-                          size: 16,
-                          color: _passwordSuccess
-                              ? AppTheme.success
-                              : AppTheme.danger,
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
+          : Column(
+              children: [
+                Container(height: 1, color: context.borderColor),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                  child: Column(
+                    children: [
+                      _pwField(_currentPasswordController, 'Mevcut şifre'),
+                      const SizedBox(height: 8),
+                      _pwField(_newPasswordController, 'Yeni şifre'),
+                      const SizedBox(height: 8),
+                      _pwField(_confirmPasswordController, 'Yeni şifre, tekrar'),
+                      if (_passwordMessage != null) ...[
+                        const SizedBox(height: 10),
+                        Align(
+                          alignment: Alignment.centerLeft,
                           child: Text(
                             _passwordMessage!,
                             style: TextStyle(
                               fontSize: 13,
-                              color: _passwordSuccess
-                                  ? AppTheme.success
-                                  : AppTheme.danger,
+                              color: _passwordSuccess ? context.ok : context.pen,
                             ),
                           ),
                         ),
                       ],
-                    ),
-                  ],
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: _passwordLoading ? null : _changePassword,
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 13),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
+                      const SizedBox(height: 12),
+                      ElevatedButton(
+                        onPressed: _passwordLoading ? null : _changePassword,
+                        style: ElevatedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(42),
                         ),
+                        child: _passwordLoading
+                            ? SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: context.onBlue),
+                              )
+                            : const Text('Şifreyi değiştir'),
                       ),
-                      child: _passwordLoading
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Şifreyi Değiştir',
-                              style: TextStyle(fontSize: 14)),
-                    ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
     );
   }
@@ -945,22 +723,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       style: TextStyle(fontSize: 14, color: context.textPrimary),
       decoration: InputDecoration(
         hintText: hint,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(color: context.borderColor),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(color: context.borderColor),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: AppTheme.primary, width: 1.5),
-        ),
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
       ),
     );
   }
-
 }

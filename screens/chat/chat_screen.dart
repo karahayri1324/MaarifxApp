@@ -11,6 +11,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../widgets/chat/user_message.dart';
 import '../../widgets/chat/ai_message.dart';
+import '../../widgets/chat/anchor_growth_sliver.dart';
 import '../../widgets/input/chat_input.dart';
 import '../../widgets/common/loading_overlay.dart';
 import '../../widgets/drawer/nav_drawer.dart';
@@ -38,13 +39,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   StreamSubscription? _shareSubscription;
   File? _sharedImage;
 
-  // En yeni mesaj (reverse list'in anchor'ı, index 0) stream sırasında büyür.
-  // Kullanıcı offset 0'da değilse (yukarı kaydırmışsa) bu büyüme, altındaki
-  // içeriği pixel bazında kaydırıyor gibi görünüyordu ("scroll jump" bugu).
-  // Bu key ile anchor item'ın boyunu her frame ölçüp farkı jumpTo ile telafi ediyoruz.
-  final GlobalKey _latestItemKey = GlobalKey();
-  double? _latestItemHeight;
-  String? _latestItemId;
+  // Balon widget önbelleği — anahtar mesaj kimliği, değer (imza, widget).
+  // Akışta sağlayıcı her token'da bildirim yayar ve Consumer yeniden kurulur;
+  // imzası değişmeyen balon için AYNI Widget örneği döndürülünce
+  // Element.updateChild alt ağacı hiç dolaşmaz. Bkz. ChatMessage.uiImzasi().
+  final Map<String, ({String imza, Widget widget})> _balonOnbellek = {};
 
   @override
   void initState() {
@@ -162,37 +161,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       duration: const Duration(milliseconds: 250),
       curve: Curves.easeOut,
     );
-  }
-
-  // En yeni mesajın (index 0, reverse-list anchor) yüksekliği stream token'larıyla
-  // sürekli değişir. Kullanıcı pixels==0'da (en altta) değilse bu boy değişimi
-  // ScrollPosition.pixels'i etkilemeden altındaki görünümü kaydırır — kullanıcı
-  // "sürekli zıplıyor" olarak algılar. Her frame sonrası boy farkını ölçüp
-  // aynı miktarda jumpTo ile telafi ediyoruz, kullanıcının okuduğu konum sabit kalır.
-  void _compensateScroll() {
-    if (!mounted || !_scrollController.hasClients) return;
-    final messages = context.read<ChatProvider>().messages;
-    if (messages.isEmpty) return;
-    final latestId = messages.last.id;
-    final renderObject = _latestItemKey.currentContext?.findRenderObject();
-    final newHeight =
-        renderObject is RenderBox && renderObject.hasSize ? renderObject.size.height : null;
-
-    if (_latestItemId != latestId) {
-      // Yeni bir mesaj eklendi: farklı item'lar arası boy farkı anlamsız, sadece
-      // yeni taban yüksekliği kaydedilir, bu frame'de telafi uygulanmaz.
-      _latestItemId = latestId;
-      _latestItemHeight = newHeight;
-      return;
-    }
-
-    if (newHeight != null && _latestItemHeight != null) {
-      final delta = newHeight - _latestItemHeight!;
-      if (delta.abs() > 0.5 && _scrollController.position.pixels > 4) {
-        _scrollController.jumpTo(_scrollController.position.pixels + delta);
-      }
-    }
-    _latestItemHeight = newHeight;
   }
 
   /// AI veri kullanim onay dialogu
@@ -547,7 +515,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
                 // Input
                 ChatInput(
-                  enabled: true,
+                  enabled: !chatProvider.sistemKapali,
+                  bakimda: chatProvider.sistemKapali,
                   onSend: _handleSend,
                   externalImage: _sharedImage,
                   onExternalImageConsumed: () {
@@ -629,115 +598,24 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// AppBar model rozetinden açılan model seçici (ChatInput sheet'i ile
-  /// aynı ModelSelector'ı, dolayısıyla aynı provider state'ini kullanır)
-  void _showModelSheet() {
-    showModalBottomSheet(
-      context: context,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: context.borderColor,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 8),
-            const ModelSelector(),
-            const SizedBox(height: 16),
-          ],
-        ),
-      ),
-    );
-  }
-
   PreferredSizeWidget _buildAppBar(BuildContext context, bool isGuest) {
-    // select: yalnız model değişince rebuild (watch tüm token stream'inde AppBar'ı yeniden çizerdi)
-    final isMax = context.select<ChatProvider, bool>((p) => p.model == '3.0-max');
-
     return AppBar(
-      backgroundColor: context.bgPrimary,
+      backgroundColor: context.bgSecondary,
       elevation: 0,
       leading: isGuest
-          ? null // Guest modda menu butonu yok
+          ? null // Misafirde menü yok
           : IconButton(
-              icon: Icon(Icons.menu, color: context.textPrimary),
+              icon: Icon(Icons.menu_rounded, color: context.textPrimary),
               onPressed: () => _scaffoldKey.currentState?.openDrawer(),
             ),
       automaticallyImplyLeading: false,
-      title: GestureDetector(
-        onTap: _showModelSheet,
-        behavior: HitTestBehavior.opaque,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(10),
-                color: context.bgSecondary,
-                boxShadow: AppTheme.shadowSm,
-              ),
-              padding: const EdgeInsets.all(5),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(5),
-                child: Image.asset(
-                  'assets/images/karahayri.png',
-                  fit: BoxFit.contain,
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              'MaariFx',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: context.textPrimary,
-              ),
-            ),
-            const SizedBox(width: 6),
-            // Model rozeti: standartta '3.0', MAX aktifken gradient 'MAX'
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-                gradient: isMax
-                    ? const LinearGradient(
-                        colors: [AppTheme.primary, AppTheme.primaryDark],
-                      )
-                    : null,
-                color: isMax ? null : AppTheme.primary.withOpacity(0.1),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    isMax ? 'MAX' : '3.0',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.5,
-                      color: isMax ? Colors.white : AppTheme.primary,
-                    ),
-                  ),
-                  Icon(
-                    Icons.keyboard_arrow_down_rounded,
-                    size: 14,
-                    color: isMax ? Colors.white : AppTheme.primary,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+      // Kutulu logo ve model rozeti yerine yazı-logo. Model composer'dan seçilir.
+      title: Image.asset(
+        context.wordmarkAsset,
+        height: 24,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.medium,
+        semanticLabel: 'MaariFx',
       ),
       actions: isGuest
           ? [
@@ -747,13 +625,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     MaterialPageRoute(builder: (_) => const LoginScreen()),
                   );
                 },
-                child: const Text(
-                  'Giriş Yap',
-                  style: TextStyle(fontSize: 14),
-                ),
+                child: const Text('Giriş yap'),
               ),
               Padding(
-                padding: const EdgeInsets.only(right: 8),
+                padding: const EdgeInsets.only(right: 10),
                 child: ElevatedButton(
                   onPressed: () {
                     Navigator.of(context).push(
@@ -764,65 +639,55 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                     minimumSize: Size.zero,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    textStyle: const TextStyle(fontFamily: AppTheme.fontSans, fontSize: 13.5, fontWeight: FontWeight.w500),
                   ),
-                  child: const Text(
-                    'Kayıt Ol',
-                    style: TextStyle(fontSize: 14),
-                  ),
+                  child: const Text('Kayıt ol'),
                 ),
               ),
             ]
           : const [],
-      bottom: PreferredSize(
-        preferredSize: const Size.fromHeight(1),
-        child: Container(
-          color: context.borderColor,
-          height: 1,
-        ),
-      ),
     );
   }
 
+  /// Boş ekran: yalnız selamlama. Logo, karşılama metni ve öneri çipi yok.
   Widget _buildWelcomeMessage(BuildContext context) {
+    final ad = context.select<AuthProvider, String?>((a) {
+      final u = a.user;
+      if (u == null || a.isGuest) return null;
+      final n = (u.displayName ?? '').trim();
+      return n.isEmpty ? null : n.split(RegExp(r'\s+')).first;
+    });
+    final saat = DateTime.now().hour;
+    final selam = saat < 5
+        ? 'İyi geceler'
+        : saat < 11
+            ? 'Günaydın'
+            : saat < 17
+                ? 'İyi günler'
+                : saat < 22
+                    ? 'İyi akşamlar'
+                    : 'İyi geceler';
     return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(28, 0, 28, 48),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 100,
-              height: 100,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(24),
-                color: context.bgPrimary,
-                boxShadow: AppTheme.shadowMd,
-              ),
-              padding: const EdgeInsets.all(16),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.asset('assets/images/karahayri.png'),
-              ),
-            ),
-            const SizedBox(height: 28),
             Text(
-              'MaariFx\'e Hoş Geldiniz',
+              ad == null ? '$selam.' : '$selam, $ad.',
+              textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.bold,
+                fontSize: 22,
+                fontWeight: FontWeight.w500,
+                letterSpacing: -0.2,
                 color: context.textPrimary,
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 6),
             Text(
-              'Çözemediğin soruları çözmene yardımcı oluyorum.\n'
-              'Soruyu yükleyerek cevabı öğrenmeye başlayabilirsin!',
+              'Hangi soruya bakalım?',
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 15,
-                color: context.textSecondary,
-                height: 1.6,
-              ),
+              style: TextStyle(fontSize: 15, color: context.textSecondary),
             ),
           ],
         ),
@@ -830,61 +695,127 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
   }
 
+  /// Ters (reverse) sohbet listesi.
+  ///
+  /// İki sliver: DİPTE en yeni mesaj ("çapa") kendi sliver'ında, üstünde geri
+  /// kalan mesajlar tembel bir SliverList'te.
+  ///
+  /// Çapanın AYRI sliver olması ŞART. Akış sırasında çapanın boyu her token'da
+  /// büyür ve üstündeki tüm içeriği kaydırır; bu kayma [AnchorGrowthSliver]
+  /// içinde LAYOUT ANINDA telafi ediliyor. Eskiden telafi post-frame
+  /// `jumpTo` ile yapılıyordu: bir kare geç kaldığı ve aktif sürüklemeyi iptal
+  /// ettiği için yukarı kaydırırken pırpır ediyordu (ayrıntı:
+  /// widgets/chat/anchor_growth_sliver.dart).
   Widget _buildMessageList(ChatProvider chatProvider) {
-    // Reverse ListView: en yeni mesaj viewport dibinde anchor'lanır.
-    // Streaming sırasında bubble yukarı doğru büyür; kullanıcı en altta değilse
-    // bu büyüme _compensateScroll ile telafi edilir (bkz. yukarısı).
-    WidgetsBinding.instance.addPostFrameCallback((_) => _compensateScroll());
-    return ListView.builder(
+    final messages = chatProvider.messages;
+    final anchor = messages.last;
+    _onbellekBudama(messages);
+
+    // Yeni mesaj eklenince ters listede TÜM indisler kayar; anahtar + bu geri
+    // çağrı olmasaydı görünürdeki her öğe başka bir mesajla yeniden kurulurdu.
+    final Map<String, int> idIndis = {
+      for (var i = 0; i < messages.length; i++) messages[i].id: i
+    };
+
+    return CustomScrollView(
       controller: _scrollController,
       reverse: true,
-      padding: const EdgeInsets.all(16),
-      itemCount: chatProvider.messages.length,
-      itemBuilder: (context, index) {
-        final message =
-            chatProvider.messages[chatProvider.messages.length - 1 - index];
+      slivers: [
+        // Dipteki boşluk: eski ListView padding'i (all 16) + balonun kendi alt
+        // boşluğu (16) ile aynı görünüm korunur.
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          sliver: AnchorGrowthSliver(
+            anchorId: anchor.id,
+            child: _balon(chatProvider, anchor),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) => _balon(
+                  chatProvider, messages[messages.length - 2 - index]),
+              childCount: messages.length - 1,
+              findChildIndexCallback: (Key key) {
+                if (key is! ValueKey<String>) return null;
+                final i = idIndis[key.value];
+                if (i == null || i >= messages.length - 1) return null;
+                return messages.length - 2 - i;
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
-        final bubble = Padding(
-          padding: const EdgeInsets.only(bottom: 16),
-          child: message.type == MessageType.user
-              ? UserMessageWidget(message: message)
-              : AIMessageWidget(
-                  message: message,
-                  onQuizAnswer: _handleQuizAnswer,
-                  onStepChange: (step) {
-                    chatProvider.navigateToStep(message.id, step);
-                  },
-                  onRetry: chatProvider.canRetry(message.id)
-                      ? () async {
-                          final result = await chatProvider.retryMessage(message.id);
-                          _scrollToBottom(force: true);
-                          // Tekrar denenen istek de çizimsize düşmüş olabilir
-                          // (fotoğrafsız metin / quiz cevabı) — oynatıcı kararı
-                          // _openPlayerForResult içindeki tek koruma verir.
-                          if (result != null && mounted) {
-                            await _openPlayerForResult(result);
-                          }
-                        }
-                      : null,
-                  onReplay: (requestId) async {
-                    final token = context.read<AuthProvider>().token ?? '';
-                    final annotationResult = await Navigator.of(context).push<AnnotationResult?>(
-                      MaterialPageRoute(
-                        builder: (_) => PlayerScreen(
-                          requestId: requestId,
-                          token: token,
-                          title: 'Çözüm Tekrarı',
-                        ),
-                      ),
-                    );
-                    if (annotationResult != null && mounted) {
-                      _handleAnnotationResult(annotationResult);
+  /// Listede olmayan mesajların önbellek kayıtlarını atar.
+  void _onbellekBudama(List<ChatMessage> messages) {
+    if (_balonOnbellek.length <= messages.length) return;
+    final ids = {for (final m in messages) m.id};
+    _balonOnbellek.removeWhere((id, _) => !ids.contains(id));
+  }
+
+  /// Balon widget'ı — mesajın görünen hâli değişmediyse AYNI ÖRNEĞİ döndürür.
+  ///
+  /// Akışta sağlayıcı her token'da bildirim yayar ve bu Consumer yeniden
+  /// kurulur. Aynı Widget örneği döndüğünde `Element.updateChild` alt ağacı hiç
+  /// dolaşmaz; yani ekrandaki ESKİ çözümlerin markdown+LaTeX gövdeleri saniyede
+  /// onlarca kez baştan kurulmaz. Kaydırma sırasında kare düşmesinin (ve
+  /// dolayısıyla takılmanın) ana kaynağı buydu.
+  Widget _balon(ChatProvider chatProvider, ChatMessage message) {
+    final imza =
+        '${message.uiImzasi()}|${chatProvider.canRetry(message.id) ? 1 : 0}';
+    final onceki = _balonOnbellek[message.id];
+    if (onceki != null && onceki.imza == imza) return onceki.widget;
+
+    final widget = _balonKur(chatProvider, message);
+    _balonOnbellek[message.id] = (imza: imza, widget: widget);
+    return widget;
+  }
+
+  Widget _balonKur(ChatProvider chatProvider, ChatMessage message) {
+    return Padding(
+      key: ValueKey<String>(message.id),
+      padding: const EdgeInsets.only(bottom: 16),
+      child: message.type == MessageType.user
+          ? UserMessageWidget(message: message)
+          : AIMessageWidget(
+              message: message,
+              onQuizAnswer: _handleQuizAnswer,
+              onStepChange: (step) {
+                chatProvider.navigateToStep(message.id, step);
+              },
+              onRetry: chatProvider.canRetry(message.id)
+                  ? () async {
+                      final result = await chatProvider.retryMessage(message.id);
+                      _scrollToBottom(force: true);
+                      // Tekrar denenen istek de çizimsize düşmüş olabilir
+                      // (fotoğrafsız metin / quiz cevabı) — oynatıcı kararı
+                      // _openPlayerForResult içindeki tek koruma verir.
+                      if (result != null && mounted) {
+                        await _openPlayerForResult(result);
+                      }
                     }
-                  },
-                ),
-        );
-        return index == 0 ? KeyedSubtree(key: _latestItemKey, child: bubble) : bubble;
-      },
+                  : null,
+              onReplay: (requestId) async {
+                final token = context.read<AuthProvider>().token ?? '';
+                final annotationResult =
+                    await Navigator.of(context).push<AnnotationResult?>(
+                  MaterialPageRoute(
+                    builder: (_) => PlayerScreen(
+                      requestId: requestId,
+                      token: token,
+                      title: 'Çözüm Tekrarı',
+                    ),
+                  ),
+                );
+                if (annotationResult != null && mounted) {
+                  _handleAnnotationResult(annotationResult);
+                }
+              },
+            ),
     );
   }
 }

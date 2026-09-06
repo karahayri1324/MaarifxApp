@@ -124,18 +124,6 @@ class _QuizCardState extends State<QuizCard> {
     QuizType.fill: 'Boşluk doldurma',
   };
 
-  static const Map<QuizType, IconData> _ikon = {
-    QuizType.open: Icons.edit_note_rounded,
-    QuizType.short: Icons.short_text_rounded,
-    QuizType.mcq: Icons.radio_button_checked_rounded,
-    QuizType.multi: Icons.checklist_rtl_rounded,
-    QuizType.trueFalse: Icons.rule_rounded,
-    QuizType.match: Icons.compare_arrows_rounded,
-    QuizType.order: Icons.format_list_numbered_rounded,
-    QuizType.checklist: Icons.fact_check_outlined,
-    QuizType.fill: Icons.text_fields_rounded,
-  };
-
   @override
   Widget build(BuildContext context) {
     final q = widget.quiz;
@@ -147,20 +135,14 @@ class _QuizCardState extends State<QuizCard> {
       decoration: BoxDecoration(
         color: context.bgPrimary,
         borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-        border: Border.all(
-          color: answered
-              ? AppTheme.success.withOpacity(0.45)
-              : AppTheme.primary.withOpacity(0.35),
-          width: 1.2,
-        ),
-        boxShadow: AppTheme.shadowSm,
+        border: Border.all(color: context.borderColor),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _header(context, q, answered),
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -172,7 +154,7 @@ class _QuizCardState extends State<QuizCard> {
                     style: TextStyle(
                       fontSize: 14.5,
                       height: 1.45,
-                      fontWeight: FontWeight.w600,
+                      fontWeight: FontWeight.w500,
                       color: context.textPrimary,
                     ),
                   ),
@@ -187,40 +169,14 @@ class _QuizCardState extends State<QuizCard> {
   }
 
   Widget _header(BuildContext context, QuizBlock q, bool answered) {
-    final c = answered ? AppTheme.success : AppTheme.primary;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-      decoration: BoxDecoration(
-        color: c.withOpacity(0.08),
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(AppTheme.radiusMd),
-          topRight: Radius.circular(AppTheme.radiusMd),
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(answered ? Icons.check_circle_rounded : (_ikon[q.type] ?? Icons.help_outline),
-              size: 16, color: c),
-          const SizedBox(width: 7),
-          Expanded(
-            child: Text(
-              answered ? 'Cevabın gönderildi' : (_etiket[q.type] ?? 'Soru'),
-              style: TextStyle(
-                  fontSize: 12.5, fontWeight: FontWeight.w600, color: c),
-            ),
-          ),
-          if (q.difficulty.isNotEmpty && !answered)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-              decoration: BoxDecoration(
-                color: context.bgTertiary,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(q.difficulty,
-                  style: TextStyle(fontSize: 11, color: context.textSecondary)),
-            ),
-        ],
-      ),
+    final parcalar = <String>[
+      answered ? 'Cevabın gönderildi' : 'Soru',
+      _etiket[q.type] ?? 'Soru',
+      if (q.difficulty.isNotEmpty && !answered) q.difficulty,
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+      child: Text(trBuyuk(parcalar.join(' · ')), style: context.eyebrow),
     );
   }
 
@@ -271,7 +227,7 @@ class _QuizCardState extends State<QuizCard> {
       width: double.infinity,
       padding: const EdgeInsets.all(11),
       decoration: BoxDecoration(
-        color: context.bgTertiary,
+        color: context.bgSecondary,
         borderRadius: BorderRadius.circular(AppTheme.radiusSm),
         border: Border.all(color: context.borderColor),
       ),
@@ -296,22 +252,15 @@ class _QuizCardState extends State<QuizCard> {
   Widget _gonderButonu(String etiket, {bool aktif = true}) {
     return SizedBox(
       width: double.infinity,
-      child: FilledButton.icon(
+      child: FilledButton(
         onPressed: (aktif && !_sending) ? _submit : null,
-        icon: _sending
+        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(38)),
+        child: _sending
             ? const SizedBox(
                 width: 14,
                 height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-            : const Icon(Icons.send_rounded, size: 16),
-        label: Text(etiket),
-        style: FilledButton.styleFrom(
-          backgroundColor: AppTheme.primary,
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-          ),
-        ),
+                child: CircularProgressIndicator(strokeWidth: 2))
+            : Text(etiket),
       ),
     );
   }
@@ -331,21 +280,8 @@ class _QuizCardState extends State<QuizCard> {
           decoration: InputDecoration(
             hintText: q.placeholder.isNotEmpty ? q.placeholder : 'Cevabını yaz…',
             hintStyle: TextStyle(fontSize: 14, color: context.textMuted),
-            filled: true,
-            fillColor: context.bgTertiary,
+            fillColor: context.bgSecondary,
             contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-              borderSide: BorderSide(color: context.borderColor),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-              borderSide: BorderSide(color: context.borderColor),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-              borderSide: const BorderSide(color: AppTheme.primary, width: 1.4),
-            ),
           ),
         ),
         if (q.minChars > 0 && _text.text.trim().length < q.minChars)
@@ -366,37 +302,26 @@ class _QuizCardState extends State<QuizCard> {
   }
 
   Widget _dogruYanlis(BuildContext context) {
-    Widget btn(String etiket, bool deger, IconData ikon) {
+    Widget btn(String etiket, bool deger) {
       final secili = _bool == deger;
       return Expanded(
         child: InkWell(
           borderRadius: BorderRadius.circular(AppTheme.radiusSm),
           onTap: () => setState(() => _bool = deger),
           child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 14),
+            padding: const EdgeInsets.symmetric(vertical: 11),
+            alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: secili ? AppTheme.primary.withOpacity(0.1) : context.bgTertiary,
+              color: secili ? context.tint : Colors.transparent,
               borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-              border: Border.all(
-                color: secili ? AppTheme.primary : context.borderColor,
-                width: secili ? 1.5 : 1,
-              ),
+              border: Border.all(color: secili ? context.blue : context.borderColor),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(ikon,
-                    size: 17,
-                    color: secili ? AppTheme.primary : context.textSecondary),
-                const SizedBox(width: 7),
-                Text(etiket,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: secili ? FontWeight.w700 : FontWeight.w500,
-                      color: secili ? AppTheme.primary : context.textPrimary,
-                    )),
-              ],
-            ),
+            child: Text(etiket,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: secili ? FontWeight.w500 : FontWeight.w400,
+                  color: secili ? context.textPrimary : context.textSecondary,
+                )),
           ),
         ),
       );
@@ -405,9 +330,9 @@ class _QuizCardState extends State<QuizCard> {
     return Column(
       children: [
         Row(children: [
-          btn('Doğru', true, Icons.check_rounded),
-          const SizedBox(width: 10),
-          btn('Yanlış', false, Icons.close_rounded),
+          btn('Doğru', true),
+          const SizedBox(width: 8),
+          btn('Yanlış', false),
         ]),
         const SizedBox(height: 10),
         _gonderButonu('Gönder', aktif: _bool != null),
@@ -427,9 +352,9 @@ class _QuizCardState extends State<QuizCard> {
             etiket: o.label,
             onTap: () => setState(() => _single = o.id),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 4),
         ],
-        const SizedBox(height: 2),
+        const SizedBox(height: 6),
         _gonderButonu('Gönder', aktif: _single != null),
       ],
     );
@@ -450,9 +375,9 @@ class _QuizCardState extends State<QuizCard> {
               if (!_multi.remove(o.id)) _multi.add(o.id);
             }),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 4),
         ],
-        const SizedBox(height: 2),
+        const SizedBox(height: 6),
         _gonderButonu(btnEtiket, aktif: _multi.isNotEmpty),
       ],
     );
@@ -466,48 +391,51 @@ class _QuizCardState extends State<QuizCard> {
     required String etiket,
     required VoidCallback onTap,
   }) {
-    // Rozet metni yalnız TEK harfli şık id'lerinde anlamlı (A/B/C/D).
-    // checklist/order id'leri (c1, I1) kullanıcıya bir şey ifade etmez → boş kutu.
+    // Harf yalnız TEK harfli şık id'lerinde anlamlı (A/B/C/D).
     final rozetGoster = rozet.length == 1;
+    final isaret = cokluMu
+        ? Container(
+            width: 16,
+            height: 16,
+            decoration: BoxDecoration(
+              color: secili ? context.blue : Colors.transparent,
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: secili ? context.blue : context.textMuted, width: 1.5),
+            ),
+            child: secili ? Icon(Icons.check_rounded, size: 12, color: context.onBlue) : null,
+          )
+        : Container(
+            width: 16,
+            height: 16,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: secili ? context.blue : context.textMuted,
+                width: secili ? 5 : 1.5,
+              ),
+            ),
+          );
     return InkWell(
       borderRadius: BorderRadius.circular(AppTheme.radiusSm),
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 11),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
-          color: secili ? AppTheme.primary.withOpacity(0.08) : context.bgTertiary,
+          color: secili ? context.tint : Colors.transparent,
           borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-          border: Border.all(
-            color: secili ? AppTheme.primary : context.borderColor,
-            width: secili ? 1.4 : 1,
-          ),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: 22,
-              height: 22,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: secili ? AppTheme.primary : Colors.transparent,
-                borderRadius: BorderRadius.circular(cokluMu ? 5 : 11),
-                border: Border.all(
-                  color: secili ? AppTheme.primary : context.textMuted,
-                  width: 1.4,
-                ),
-              ),
-              child: secili
-                  ? const Icon(Icons.check_rounded, size: 14, color: Colors.white)
-                  : (rozetGoster
-                      ? Text(rozet,
-                          style: TextStyle(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w700,
-                              color: context.textSecondary))
-                      : null),
-            ),
+            Padding(padding: const EdgeInsets.only(top: 2), child: isaret),
             const SizedBox(width: 10),
+            if (rozetGoster) ...[
+              SizedBox(
+                width: 14,
+                child: Text(rozet, style: context.mono(fontSize: 12)),
+              ),
+              const SizedBox(width: 6),
+            ],
             Expanded(
               child: MdLabel(
                 etiket,
@@ -515,7 +443,7 @@ class _QuizCardState extends State<QuizCard> {
                   fontSize: 13.8,
                   height: 1.4,
                   color: context.textPrimary,
-                  fontWeight: secili ? FontWeight.w600 : FontWeight.w400,
+                  fontWeight: FontWeight.w400,
                 ),
               ),
             ),
@@ -533,12 +461,10 @@ class _QuizCardState extends State<QuizCard> {
             padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
             margin: const EdgeInsets.only(bottom: 9),
             decoration: BoxDecoration(
-              color: context.bgTertiary,
+              color: context.bgSecondary,
               borderRadius: BorderRadius.circular(AppTheme.radiusSm),
               border: Border.all(
-                color: _match.containsKey(l.id)
-                    ? AppTheme.primary.withOpacity(0.6)
-                    : context.borderColor,
+                color: _match.containsKey(l.id) ? context.blue : context.borderColor,
               ),
             ),
             child: Column(
@@ -547,7 +473,7 @@ class _QuizCardState extends State<QuizCard> {
                 MdLabel(l.label,
                     style: TextStyle(
                         fontSize: 13.8,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w500,
                         color: context.textPrimary)),
                 const SizedBox(height: 7),
                 DropdownButtonHideUnderline(
@@ -606,25 +532,15 @@ class _QuizCardState extends State<QuizCard> {
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
                 margin: const EdgeInsets.only(bottom: 8),
                 decoration: BoxDecoration(
-                  color: context.bgTertiary,
+                  color: context.bgSecondary,
                   borderRadius: BorderRadius.circular(AppTheme.radiusSm),
                   border: Border.all(color: context.borderColor),
                 ),
                 child: Row(
                   children: [
-                    Container(
-                      width: 21,
-                      height: 21,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: AppTheme.primary.withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text('${i + 1}',
-                          style: const TextStyle(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w700,
-                              color: AppTheme.primary)),
+                    SizedBox(
+                      width: 18,
+                      child: Text('${i + 1}', style: context.mono(fontSize: 12)),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
@@ -658,7 +574,7 @@ class _QuizCardState extends State<QuizCard> {
           width: double.infinity,
           padding: const EdgeInsets.all(11),
           decoration: BoxDecoration(
-            color: context.bgTertiary,
+            color: context.bgSecondary,
             borderRadius: BorderRadius.circular(AppTheme.radiusSm),
             border: Border.all(color: context.borderColor),
           ),
@@ -676,21 +592,11 @@ class _QuizCardState extends State<QuizCard> {
         for (var i = 0; i < q.blanks.length; i++) ...[
           Row(
             children: [
-              Container(
-                width: 24,
-                height: 24,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text('${i + 1}',
-                    style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: AppTheme.primary)),
+              SizedBox(
+                width: 20,
+                child: Text('${i + 1}', style: context.mono(fontSize: 12)),
               ),
-              const SizedBox(width: 9),
+              const SizedBox(width: 6),
               Expanded(
                 child: TextField(
                   controller: _blanks[q.blanks[i].id],
@@ -700,22 +606,9 @@ class _QuizCardState extends State<QuizCard> {
                     isDense: true,
                     hintText: '${i + 1}. boşluk',
                     hintStyle: TextStyle(fontSize: 13, color: context.textMuted),
-                    filled: true,
-                    fillColor: context.bgTertiary,
+                    fillColor: context.bgSecondary,
                     contentPadding:
                         const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-                      borderSide: BorderSide(color: context.borderColor),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-                      borderSide: BorderSide(color: context.borderColor),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-                      borderSide: const BorderSide(color: AppTheme.primary, width: 1.4),
-                    ),
                   ),
                 ),
               ),

@@ -4,6 +4,11 @@ import '../config/theme.dart';
 import '../providers/auth_provider.dart';
 import 'chat/chat_screen.dart';
 
+/// Açılış: yazı-logo soldan sağa "yazılır", altta yayıncı satırı belirir,
+/// sonra sohbete geçilir. Elastik zıplama, dönme ve parlama bilerek yok.
+///
+/// Süre: 0,2 s bekleme + 0,9 s yazım + 0,45 s yayıncı; en erken 1,9 s'de
+/// geçiş (kimlik doğrulama daha uzun sürerse onu bekler).
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -15,49 +20,25 @@ class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   bool _authReady = false;
 
-  late AnimationController _controller;
-  late Animation<double> _logoScale;
-  late Animation<double> _logoRotation;
-  late Animation<double> _textOpacity;
-  late Animation<double> _glowIntensity;
+  late final AnimationController _controller;
+  late final Animation<double> _yazim;   // 0 → 1: soldan sağa açılma
+  late final Animation<double> _yayinci; // alt satır opaklığı
 
   @override
   void initState() {
     super.initState();
-
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1200),
+      duration: const Duration(milliseconds: 1400),
     );
-
-    _logoScale = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _controller,
-        curve: const Interval(0.0, 0.6, curve: Curves.elasticOut),
-      ),
+    _yazim = CurvedAnimation(
+      parent: _controller,
+      curve: const Interval(0.0, 0.64, curve: Curves.easeInOutCubic),
     );
-
-    _logoRotation = Tween<double>(begin: -0.3, end: 0.0).animate(
-      CurvedAnimation(
-        parent: _controller,
-        curve: const Interval(0.0, 0.5, curve: Curves.easeOutBack),
-      ),
+    _yayinci = CurvedAnimation(
+      parent: _controller,
+      curve: const Interval(0.66, 1.0, curve: Curves.easeOut),
     );
-
-    _textOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _controller,
-        curve: const Interval(0.4, 0.8, curve: Curves.easeIn),
-      ),
-    );
-
-    _glowIntensity = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _controller,
-        curve: const Interval(0.6, 1.0, curve: Curves.easeInOut),
-      ),
-    );
-
     _startAnimation();
     _checkAuth();
   }
@@ -67,8 +48,7 @@ class _SplashScreenState extends State<SplashScreen>
     if (!mounted) return;
     _controller.forward();
 
-    // 2s görünür kalsın, sonra navigate
-    await Future.delayed(const Duration(milliseconds: 2200));
+    await Future.delayed(const Duration(milliseconds: 1700));
     if (!mounted) return;
 
     while (!_authReady && mounted) {
@@ -100,7 +80,7 @@ class _SplashScreenState extends State<SplashScreen>
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           return FadeTransition(opacity: animation, child: child);
         },
-        transitionDuration: const Duration(milliseconds: 500),
+        transitionDuration: const Duration(milliseconds: 450),
       ),
     );
   }
@@ -113,54 +93,57 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
+    final azHareket = MediaQuery.of(context).disableAnimations;
     return Scaffold(
       backgroundColor: context.bgSecondary,
-      body: Center(
-        child: AnimatedBuilder(
-          animation: _controller,
-          builder: (context, child) {
-            return Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Transform.scale(
-                  scale: _logoScale.value,
-                  child: Transform.rotate(
-                    angle: _logoRotation.value,
-                    child: Image.asset(
-                      'assets/images/Ogretimsayfam.png',
-                      width: 80,
-                      height: 80,
-                      fit: BoxFit.contain,
-                    ),
+      body: Stack(
+        children: [
+          Center(
+            child: AnimatedBuilder(
+              animation: _yazim,
+              builder: (context, child) {
+                final t = azHareket ? 1.0 : _yazim.value;
+                return ClipRect(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    widthFactor: t.clamp(0.0, 1.0),
+                    child: child,
                   ),
-                ),
-                const SizedBox(width: 12),
-                Opacity(
-                  opacity: _textOpacity.value,
-                  child: Text(
-                    'ÖgretimSayfam',
-                    style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800,
-                      color: const Color(0xFF4A9BD9),
-                      letterSpacing: 1.0,
-                      shadows: [
-                        Shadow(
-                          color: const Color(0xFF4A9BD9).withOpacity(0.4 * _glowIntensity.value),
-                          blurRadius: 12 * _glowIntensity.value,
-                        ),
-                        Shadow(
-                          color: const Color(0xFF2E7BBF).withOpacity(0.25 * _glowIntensity.value),
-                          blurRadius: 24 * _glowIntensity.value,
-                        ),
-                      ],
-                    ),
+                );
+              },
+              child: Image.asset(
+                context.wordmarkAsset,
+                width: 190,
+                fit: BoxFit.contain,
+                filterQuality: FilterQuality.medium,
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 44 + MediaQuery.of(context).padding.bottom,
+            child: FadeTransition(
+              opacity: azHareket ? const AlwaysStoppedAnimation(1.0) : _yayinci,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Image.asset(
+                    'assets/images/Ogretimsayfam.png',
+                    width: 18,
+                    height: 18,
+                    fit: BoxFit.contain,
                   ),
-                ),
-              ],
-            );
-          },
-        ),
+                  const SizedBox(width: 7),
+                  Text(
+                    'bir ÖğretimSayfam uygulaması',
+                    style: TextStyle(fontSize: 12, color: context.textMuted),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

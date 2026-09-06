@@ -101,8 +101,14 @@ class AuthService {
           classLevel: data['classLevel'] as String?,
           role: data['role'] as String? ?? 'user',
         );
-        await _saveAuth(token, user);
-        return AuthResult(user: user, token: token);
+        // KAYAN YENİLEME (2026-09-03): 30 günlük jeton hiç yenilenmiyordu; süre
+        // dolunca oynatıcı/sohbet sessizce 401'e düşüyordu. Sunucu ömrünün
+        // yarısı geçmiş jetona /me cevabında TAZE jeton ekler; varsa onu sakla.
+        final yeniToken = data['token'] as String?;
+        final etkinToken =
+            (yeniToken != null && yeniToken.isNotEmpty) ? yeniToken : token;
+        await _saveAuth(etkinToken, user);
+        return AuthResult(user: user, token: etkinToken);
       } else if (response.statusCode == 401 || response.statusCode == 403) {
         // Jeton GERÇEKTEN reddedildi (süresi doldu / iptal edildi) → temizle.
         await _clearAuth();

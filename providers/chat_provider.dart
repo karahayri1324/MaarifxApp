@@ -4,9 +4,11 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/chat_message.dart';
+import 'akis_bildirimi.dart';
 import '../models/quiz_block.dart';
 import '../services/vds_service.dart';
 import '../models/server_notice.dart';
+import '../config/app_config.dart';
 
 class ChatProvider extends ChangeNotifier {
   final VdsService _vdsService;
@@ -67,8 +69,20 @@ class ChatProvider extends ChangeNotifier {
     ));
   }
 
+  /// Sunucu bakımda (feature_flags.system_closed). Composer kapanır;
+  /// sunucudan `system_open` bildirimi gelince ya da bağlantı yeniden
+  /// kurulunca açılır (yeniden kurulmada hâlâ kapalıysa ilk istek yine
+  /// system_closed getirir ve tekrar kilitler).
+  bool _sistemKapali = false;
+  bool get sistemKapali => _sistemKapali;
+
   /// Bildirimi sunucunun istediği yere yönlendirir (varsayılan: sohbet).
   void pushNotice(ServerNotice n) {
+    if (n.code == 'system_closed') {
+      _sistemKapali = true;
+    } else if (n.code == 'system_open') {
+      _sistemKapali = false;
+    }
     if (n.display == NoticeDisplay.dialog) {
       _pendingNotice = n;      // ekranı kesen modal — sunucu açıkça istediyse
     } else {
@@ -129,6 +143,10 @@ class ChatProvider extends ChangeNotifier {
   // Eşzamanlı gönderimlerde temp-id çakışmasın (aynı ms'de iki send)
   static int _tempSeq = 0;
 
+  /// Adım görseli defterinin makul üst sınırı. Gerçek çözümlerde adım
+  /// sayısı onlarla ölçülür; bu tavan yalnız bozuk sunucu verisine karşı.
+  static const int _azamiAdimSayisi = 1000;
+
   int get detailLevel => _detailLevel;
   bool get showStepData => _showStepData;
   bool get drawOnImage => _drawOnImage;
@@ -184,6 +202,9 @@ class ChatProvider extends ChangeNotifier {
 
     _connectionSubscription = _vdsService.connectionStream.listen((connected) {
       isConnected = connected;
+      // Bağlantı yeniden kurulunca bakım kilidini bırak: sunucu hâlâ kapalıysa
+      // ilk istek system_closed getirir ve composer tekrar kapanır.
+      if (connected) _sistemKapali = false;
       notifyListeners();
     });
 
@@ -303,6 +324,10 @@ class ChatProvider extends ChangeNotifier {
     await prefs.setBool('enableThinking', _enableThinking);
     notifyListeners();
   }
+
+  /// Akış token'ı bildirimlerini demetler — gerekçesi ve davranışı için
+  /// bkz. [AkisBildirimi].
+  late final AkisBildirimi _akisBildirimi = AkisBildirimi(notifyListeners);
 
   // ─── Helper: requestId ile AI mesajını bul ───
 
@@ -426,6 +451,9 @@ class ChatProvider extends ChangeNotifier {
       case VdsMessageType.requestError:
         _handleRequestError(msg.data);
         break;
+      case VdsMessageType.thumbnailReady:
+        _handleThumbnailReady(msg.data);
+        break;
       case VdsMessageType.notice:
         // Anlık, isteğe bağlı OLMAYAN bildirim (ör. okul erişimi kapatıldı).
         // İçerik yorumlanmaz; olduğu gibi UI'a taşınır.
@@ -448,7 +476,7 @@ class ChatProvider extends ChangeNotifier {
 
     final token = data['token'] as String? ?? '';
     messages[msgIndex].text += token;
-    notifyListeners();
+    _akisBildirimi.iste();
   }
 
   void _handleStreamThinking(Map<String, dynamic> data) {
@@ -464,7 +492,7 @@ class ChatProvider extends ChangeNotifier {
 
     // Düşünme METNİ saklanmıyor — öğrenciye gösterilmiyor, tek gösterge sayaç.
     messages[msgIndex].thinkingTokenEkle(token);
-    notifyListeners();
+    _akisBildirimi.iste();
   }
 
   void _handleStreamThinkingDone(Map<String, dynamic> data) {
@@ -528,7 +556,16 @@ class ChatProvider extends ChangeNotifier {
 
     messages[msgIndex].imageBase64 = imageBase64;
 
-    if (step != null && totalSteps != null) {
+    // Adım defteri SUNUCUDAN gelen sayılarla büyüyor. Bozuk/absürt bir değer
+    // (ör. step = 2^31) aşağıdaki while'ı belleği tüketen bir döngüye
+    // çeviriyordu; makul bir tavanın üstünde adım defteri güncellenmez —
+    // görselin kendisi (yukarıda) yine gösterilir.
+    if (step != null &&
+        totalSteps != null &&
+        step >= 0 &&
+        totalSteps > 0 &&
+        totalSteps <= _azamiAdimSayisi &&
+        step < totalSteps) {
       while (messages[msgIndex].stepImages.length <= step) {
         messages[msgIndex].stepImages.add('');
       }
@@ -538,6 +575,24 @@ class ChatProvider extends ChangeNotifier {
       messages[msgIndex].currentStep = step;
     }
 
+    notifyListeners();
+  }
+
+  /// Sunucudan gelen göreli yolu (/uploads/…) tam adrese çevirir.
+  static String? tamUrl(String? u) {
+    if (u == null || u.isEmpty) return null;
+    if (u.startsWith('http://') || u.startsWith('https://')) return u;
+    return '${AppConfig.apiUrl}${u.startsWith('/') ? '' : '/'}$u';
+  }
+
+  /// Çizimli çözümün küçük resmi sonradan hazır olur; kartı tazele.
+  void _handleThumbnailReady(Map<String, dynamic> data) {
+    final requestId = data['requestId'] as String?;
+    final url = tamUrl(data['thumbnailUrl'] as String?);
+    if (requestId == null || url == null) return;
+    final i = _findAiMsgIndex(requestId);
+    if (i == -1) return;
+    messages[i].thumbnailUrl = url;
     notifyListeners();
   }
 
@@ -569,6 +624,8 @@ class ChatProvider extends ChangeNotifier {
       // renderedStep 'session-signal'i ile set edilir (server.js sendCompleteToUser) → Flutter'a
       // dokunmadan garanti. Backend hasDrawing bayrağını da payload'a koyar (ileride kullanılabilir).
       messages[msgIndex].sessionDuration = data['duration'] as int?;
+      messages[msgIndex].thumbnailUrl =
+          tamUrl((data['thumbnailUrl'] ?? data['thumbnail_url']) as String?);
     }
 
     notifyListeners();
@@ -917,7 +974,11 @@ class ChatProvider extends ChangeNotifier {
 
   void _addErrorMessage(String error, {File? imageFile, String? prompt, String? classLevel,
       bool forceDirectChat = false}) {
-    final errorId = DateTime.now().millisecondsSinceEpoch.toString();
+    // Milisaniye TEK BAŞINA yetmiyordu: paralel iki istek aynı ms'de
+    // patlayınca iki hata balonu AYNI kimliği alıyor, `retryMessage`'daki
+    // removeWhere ikisini birden siliyordu. `_addNoticeMessage` ile aynı
+    // desen: mikrosaniye + sayaç.
+    final errorId = 'err_${DateTime.now().microsecondsSinceEpoch}_${_tempSeq++}';
     messages.add(ChatMessage(
       id: errorId,
       type: MessageType.ai,
@@ -1028,6 +1089,7 @@ class ChatProvider extends ChangeNotifier {
         sessionCommands: vdsMsg.sessionCommands,
         sessionAudioCommands: vdsMsg.sessionAudioCommands,
         sessionDuration: vdsMsg.sessionDuration,
+        thumbnailUrl: tamUrl(vdsMsg.thumbnailUrl),
         isDirectChat: isDirectChat,
         thinkingDone: true,
       ));
@@ -1090,6 +1152,7 @@ class ChatProvider extends ChangeNotifier {
   // ─── Temizleme ───
 
   void clearChat() {
+    _akisBildirimi.temizle();   // silinmiş mesajlar için bekleyen bildirim kalmasın
     messages.clear();
     _activeRequests.clear();
     for (final t in _watchdogs.values) {
@@ -1138,6 +1201,9 @@ class ChatProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    // Bekleyen akış bildirimi dispose'tan SONRA ateşlerse notifyListeners
+    // "used after disposed" ile patlar.
+    _akisBildirimi.durdur();
     for (final t in _watchdogs.values) {
       t.cancel();
     }

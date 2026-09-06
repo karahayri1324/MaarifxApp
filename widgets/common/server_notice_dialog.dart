@@ -49,16 +49,15 @@ class _ServerNoticeDialog extends StatelessWidget {
   final ServerNotice notice;
   const _ServerNoticeDialog({required this.notice});
 
-  ({Color renk, IconData ikon}) get _gorunum {
+  Color _renk(BuildContext context) {
     switch (notice.severity) {
       case NoticeSeverity.warning:
-        return (renk: const Color(0xFFE0A02C), ikon: Icons.warning_amber_rounded);
+        return context.warn;
       case NoticeSeverity.error:
-        return (renk: const Color(0xFFD9534F), ikon: Icons.error_outline_rounded);
       case NoticeSeverity.blocked:
-        return (renk: const Color(0xFFD9534F), ikon: Icons.lock_outline_rounded);
+        return context.pen;
       case NoticeSeverity.info:
-        return (renk: AppTheme.primary, ikon: Icons.info_outline_rounded);
+        return context.blue;
     }
   }
 
@@ -69,7 +68,7 @@ class _ServerNoticeDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final g = _gorunum;
+    final renk = _renk(context);
     // Sunucu buton vermediyse tek bir "Tamam". Engelleyici bildirimde bile bir
     // çıkış olmalı — kullanıcı ekranda kilitli kalmasın.
     final butonlar = notice.actions.isNotEmpty
@@ -79,24 +78,7 @@ class _ServerNoticeDialog extends StatelessWidget {
     return PopScope(
       canPop: notice.dismissible,
       child: AlertDialog(
-        backgroundColor: context.bgPrimary,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusMd)),
-        title: Row(
-          children: [
-            Icon(g.ikon, color: g.renk, size: 22),
-            const SizedBox(width: 9),
-            Expanded(
-              child: Text(
-                notice.title,
-                style: TextStyle(
-                  fontSize: 16.5,
-                  fontWeight: FontWeight.w700,
-                  color: context.textPrimary,
-                ),
-              ),
-            ),
-          ],
-        ),
+        title: Text(notice.title),
         content: notice.message.isEmpty
             ? null
             : SingleChildScrollView(
@@ -111,7 +93,10 @@ class _ServerNoticeDialog extends StatelessWidget {
             if (i == 0)
               FilledButton(
                 onPressed: () => _calistir(context, butonlar[i]),
-                style: FilledButton.styleFrom(backgroundColor: g.renk),
+                style: FilledButton.styleFrom(
+                  backgroundColor: renk,
+                  foregroundColor: Colors.white,
+                ),
                 child: Text(butonlar[i].label),
               )
             else

@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'server_notice.dart';
 
 enum MessageType { user, ai }
@@ -25,6 +28,9 @@ class ChatMessage {
   List<dynamic>? sessionCommands;
   List<dynamic>? sessionAudioCommands;
   int? sessionDuration;
+
+  /// Çizilmiş çözümün son karesi (sunucu üretir; yoksa null → kart fotoğrafsız).
+  String? thumbnailUrl;
 
   // Direct chat modu (drawOnImage kapalı)
   bool isDirectChat;
@@ -84,6 +90,7 @@ class ChatMessage {
     this.sessionCommands,
     this.sessionAudioCommands,
     this.sessionDuration,
+    this.thumbnailUrl,
     this.isDirectChat = false,
     this.thinkingWords = 0,
     this.thinkingPrevBosluk = true,
@@ -92,6 +99,91 @@ class ChatMessage {
   })  : stepImages = stepImages ?? [],
         stepOnlyImages = stepOnlyImages ?? [],
         timestamp = timestamp ?? DateTime.now();
+
+  String? _cozulenB64;
+  Uint8List? _cozulenBayt;
+
+  /// [imageBase64]'ün ÇÖZÜLMÜŞ hâli — aynı base64 için YALNIZ BİR KEZ hesaplanır.
+  ///
+  /// Eskiden `base64Decode` doğrudan `build` içinde çağrılıyordu. Her yeniden
+  /// kurulum yeni bir `Uint8List` üretir; `MemoryImage` eşitliği bayt listesinin
+  /// KİMLİĞİNE baktığı için görsel önbelleğinde her seferinde yeni bir anahtar
+  /// oluşuyor ve JPEG baştan çözülüyordu (akış sırasında saniyede onlarca kez),
+  /// üstelik çözüm bitene kadar kare boş kaldığı için fotoğraf göz kırpıyordu.
+  ///
+  /// Bozuk/eksik base64'te `build` patlamasın diye null döner (çağıran taraf
+  /// görseli hiç çizmez).
+  Uint8List? get imageBytes {
+    final b64 = imageBase64;
+    if (b64 == null) {
+      _cozulenB64 = null;
+      _cozulenBayt = null;
+      return null;
+    }
+    if (!identical(_cozulenB64, b64)) {
+      _cozulenB64 = b64;
+      try {
+        _cozulenBayt = base64Decode(b64);
+      } catch (_) {
+        _cozulenBayt = null;
+      }
+    }
+    return _cozulenBayt;
+  }
+
+  /// Balonun ÇİZİMİNİ etkileyen alanların özeti.
+  ///
+  /// Sohbet ekranı bu imza değişmediyse balonu YENİDEN KURMAZ, önbellekteki
+  /// aynı Widget örneğini döndürür (bkz. chat_screen.dart `_balon`). Akış
+  /// sırasında sağlayıcı her token'da bildirim yaydığı için bu, ekrandaki eski
+  /// çözümlerin markdown+LaTeX gövdelerinin saniyede onlarca kez baştan
+  /// kurulmasını engeller.
+  ///
+  /// DİKKAT: balonda GÖRÜNEN yeni bir alan eklersen BURAYA DA EKLE; yoksa alan
+  /// değişse bile balon ekranda güncellenmez.
+  String uiImzasi() {
+    final b = StringBuffer()
+      ..write(type.index)
+      ..write('|')
+      ..write(text.hashCode)
+      ..write('|')
+      ..write(text.length)
+      ..write('|')
+      ..write(status.index)
+      ..write('|')
+      ..write(hasSteps ? 1 : 0)
+      ..write('|')
+      ..write(currentStep)
+      ..write('|')
+      ..write(totalSteps)
+      ..write('|')
+      ..write(stepImages.length)
+      ..write('|')
+      ..write(stepOnlyImages.length)
+      ..write('|')
+      ..write(imageUrl ?? '')
+      ..write('|')
+      ..write(imageBase64?.length ?? -1)
+      ..write('|')
+      ..write(imageBase64?.hashCode ?? 0)
+      ..write('|')
+      ..write(requestId ?? '')
+      ..write('|')
+      ..write(hasSessionData ? 1 : 0)
+      ..write('|')
+      ..write(thumbnailUrl ?? '')
+      ..write('|')
+      ..write(sessionDuration ?? -1)
+      ..write('|')
+      ..write(isDirectChat ? 1 : 0)
+      ..write('|')
+      ..write(thinkingWords)
+      ..write('|')
+      ..write(thinkingDone ? 1 : 0)
+      ..write('|')
+      ..write(notice == null ? 0 : identityHashCode(notice));
+    return b.toString();
+  }
 
   Map<String, dynamic> toMap() {
     return {
@@ -143,6 +235,7 @@ class ChatMessage {
     List<dynamic>? sessionCommands,
     List<dynamic>? sessionAudioCommands,
     int? sessionDuration,
+    String? thumbnailUrl,
     bool? isDirectChat,
     int? thinkingWords,
     bool? thinkingDone,
@@ -167,6 +260,7 @@ class ChatMessage {
       sessionCommands: sessionCommands ?? this.sessionCommands,
       sessionAudioCommands: sessionAudioCommands ?? this.sessionAudioCommands,
       sessionDuration: sessionDuration ?? this.sessionDuration,
+      thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
       isDirectChat: isDirectChat ?? this.isDirectChat,
       thinkingWords: thinkingWords ?? this.thinkingWords,
       thinkingPrevBosluk: thinkingPrevBosluk,
