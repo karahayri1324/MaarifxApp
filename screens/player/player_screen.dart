@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
@@ -222,7 +223,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       params = const PlatformWebViewControllerCreationParams();
     }
 
-    _webViewController = WebViewController.fromPlatformCreationParams(params)
+    _webViewController = WebViewController.fromPlatformCreationParams(
+      params,
+      onPermissionRequest: _webIzinIstegi,
+    )
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.black)
       ..addJavaScriptChannel('FlutterChannel', onMessageReceived: _onJsMessage)
@@ -346,6 +350,29 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
 
     _yukle(sebep: 'ilk açılış');
+  }
+
+  /// Oynatıcının basılı-tut mikrofonu (P57 sesli soru) sayfada getUserMedia ister.
+  /// YALNIZ mikrofon verilir (kamera vb. reddedilir); sayfa zaten yalnız kendi
+  /// sunucumuzdan yüklenebiliyor (gezinme beyaz listesi). Android'de WebView izni
+  /// uygulamanın RECORD_AUDIO çalışma-anı iznine bağlı → önce sistem sorulur.
+  /// iOS'ta sistem mikrofon penceresini WKWebView kendisi gösterir (Info.plist
+  /// NSMicrophoneUsageDescription). İzin yoksa sayfa yazarak sormaya düşer.
+  Future<void> _webIzinIstegi(WebViewPermissionRequest istek) async {
+    final yalnizMik = istek.types.isNotEmpty &&
+        istek.types.every((t) => t == WebViewPermissionResourceType.microphone);
+    if (!yalnizMik) {
+      await istek.deny();
+      return;
+    }
+    if (Platform.isAndroid) {
+      final durum = await Permission.microphone.request();
+      if (!durum.isGranted) {
+        await istek.deny();
+        return;
+      }
+    }
+    await istek.grant();
   }
 
   /// Verilen adres oynatıcı sayfasının kendisi mi (alt kaynak değil)?
