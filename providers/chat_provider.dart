@@ -218,7 +218,11 @@ class ChatProvider extends ChangeNotifier {
     _detailLevel = (prefs.getInt('detailLevel') ?? 3).clamp(1, 5);
     _showStepData = prefs.getBool('showStepData') ?? false;
     _drawOnImage = prefs.getBool('drawOnImage') ?? true;
-    _enableThinking = prefs.getBool('enableThinking') ?? true;
+    // DÜŞÜNME DÜĞMESİ KALDIRILDI (2026-11-08): düşünme her zaman AÇIK. Eski sürümde
+    // kapatmış öğrencinin kayıtlı 'false'u artık YOK SAYILIR (düğme olmadan geri
+    // açamazdı) ve temizlenir.
+    _enableThinking = true;
+    if (prefs.containsKey('enableThinking')) unawaited(prefs.remove('enableThinking'));
     _samimiyet = (prefs.getInt('samimiyet') ?? 2).clamp(1, 4);
     _studentIntro = prefs.getString('studentIntro') ?? '';
     _model = prefs.getString('modelVersion') ?? '3.0';

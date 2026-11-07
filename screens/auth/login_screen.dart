@@ -5,6 +5,7 @@ import '../../providers/auth_provider.dart';
 import '../../widgets/common/form_bits.dart';
 import '../chat/chat_screen.dart';
 import 'register_screen.dart';
+import 'sifre_sifirlama_ekrani.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -43,30 +44,14 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<void> _handleForgotPassword() async {
-    final email = _emailController.text.trim();
-
-    if (email.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Önce e-posta adresini yaz')),
-      );
-      return;
-    }
-
-    final authProvider = context.read<AuthProvider>();
-    final success = await authProvider.resetPassword(email);
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            success
-                ? 'Şifre sıfırlama e-postası gönderildi'
-                : authProvider.error ?? 'Bir hata oluştu',
-          ),
-        ),
-      );
-    }
+  // ŞİFREMİ UNUTTUM (2026-11-08): e-postayla 6 haneli kod → yeni şifre.
+  void _handleForgotPassword() {
+    context.read<AuthProvider>().clearError();
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SifreSifirlamaEkrani(baslangicEposta: _emailController.text),
+      ),
+    );
   }
 
   @override

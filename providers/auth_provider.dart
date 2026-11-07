@@ -161,17 +161,6 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> resetPassword(String email) async {
-    _isLoading = true;
-    _error = null;
-    notifyListeners();
-
-    _error = 'Şifre sıfırlama şu anda desteklenmiyor. Lütfen yöneticiyle iletişime geçin.';
-    _isLoading = false;
-    notifyListeners();
-    return false;
-  }
-
   /// Misafirin sınıf seviyesini cihaza yaz + oturumdaki kullanıcıya işle.
   /// Kayıtlı kullanıcıda ÇAĞRILMAZ: orada seviye hesabın kendisidir ve ayarlardan
   /// (updateProfile) değişir; sunucu kayıtlı istekte istemcinin gönderdiğini

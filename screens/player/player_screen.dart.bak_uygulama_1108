@@ -1,0 +1,1094 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
+import '../../config/app_config.dart';
+import '../../config/theme.dart';
+import '../../services/audio_service.dart';
+import '../../config/log.dart';
+
+/// PlayerScreen'den dönen takip-turu verisi.
+/// - Ekran görüntüsüyle soru (legacy): imageFile + text.
+/// - İşaretli bölge (kalem): markedRegion [x1,y1,x2,y2] 0-1000 + text (not).
+/// - Hint yanıtı: hintRef + text (yanıt); skip=true ise "Cevap vermek istemiyorum".
+class AnnotationResult {
+  final File? imageFile;
+  final String text;
+  final List<int>? markedRegion;
+  final String? hintRef;
+  final bool skip;
+
+  AnnotationResult({
+    this.imageFile,
+    this.text = '',
+    this.markedRegion,
+    this.hintRef,
+    this.skip = false,
+  });
+}
+
+class PlayerScreen extends StatefulWidget {
+  final String requestId;
+  final String token;
+  final bool isLive;
+  final String? imageUrl;
+  final String title;
+
+  const PlayerScreen({
+    super.key,
+    required this.requestId,
+    required this.token,
+    this.isLive = false,
+    this.imageUrl,
+    this.title = 'Çözüm',
+  });
+
+  @override
+  State<PlayerScreen> createState() => _PlayerScreenState();
+}
+
+/// Yükleme hatasının sınıfı — mesaj ve yeniden deneme politikası buna göre seçilir.
+enum _HataTuru {
+  ag, // ana çerçeve ağ hatası (DNS / bağlantı yok / ağ değişti / zaman aşımı)
+  http, // ana çerçeve HTTP 4xx-5xx (deploy/restart penceresi, 502)
+  zamanAsimi, // sayfa hiç hazır olmadı (asılı TCP, çok yavaş hat)
+  motorOldu, // iOS içerik süreci öldü (jetsam) / oynatıcı yanıt vermiyor
+  canvas, // canvas.html'in kendisinin bildirdiği hata (event:'error')
+}
+
+class _PlayerScreenState extends State<PlayerScreen>
+    with WidgetsBindingObserver {
+  late final WebViewController _webViewController;
+  final AudioService _audioService = AudioService();
+  late final String _url;
+
+  // UI state
+  bool _isLoading = true;
+  bool _pageLoaded = false; // ana belge yüklendi (onPageFinished) — HATA SAYFASI için de gelir
+  bool _jsReady = false; // canvas.html gerçekten ayağa kalktı (JS el sıkışması)
+  bool _orientationSet = false; // oryantasyon ilk gorselde BIR KEZ kilitlenir
+  Timer? _postLoadErrorTimer; // yukleme SONRASI ana-cerceve hatasi icin canlilik yoklamasi
+
+  // ─── YENİDEN DENEME DURUMU (2026-09-03) ──────────────────────────────
+  // "Sayfa yüklenemedi" kalıcı bir çıkmazdı: ilk yüklemede tek bir ağ hatası
+  // (zayıf şebeke, wifi↔4G geçişi, DNS, sunucu restart'ı) öğrenciyi yalnız
+  // "Geri Dön" olan bir panele hapsediyordu; ağ geri gelince bile hiçbir şey
+  // yeniden denemiyordu. Artık HER hata sınıfı için (1) elle "Tekrar Dene",
+  // (2) geri çekilmeli otomatik yeniden deneme, (3) uygulama öne gelince
+  // anında deneme var. Başarı ölçütü onPageFinished DEĞİL (Chromium'un kendi
+  // hata sayfası için de ateşlenir), canvas'ın JS el sıkışmasıdır (_jsReady).
+  int _yuklemeDenemesi = 0; // kaçıncı yükleme (1 = ilk açılış)
+  // İçerik süreci ölümü (iOS jetsam / canlılık yok): panelsiz sessiz yeniden yükleme.
+  // Kısa sürede üst üste olursa (deterministik ölüm) normal panele düşer.
+  int _motorOlumSayisi = 0;
+  DateTime? _sonMotorOlumu;
+  static const int _motorOlumTavani = 3;
+  static const Duration _motorOlumPenceresi = Duration(minutes: 5);
+  int _otoDenemeSayisi = 0; // ardışık otomatik deneme sayısı (başarıda sıfırlanır)
+  int _canvasOtoDeneme = 0; // canvas'ın bildirdiği hatalar için ayrı, SINIRLI sayaç
+  _HataTuru? _hataTuru;
+  String? _hataAyrinti; // teknik ayrıntı (küçük yazı; teşhis için)
+  bool _hataYenidenDenenebilir = true;
+  Timer? _yenidenDeneTimer;
+  Timer? _geriSayimTimer;
+  int _geriSayim = 0;
+  Timer? _yavasTimer; // "bağlantı yavaş" ipucu
+  Timer? _zamanAsimiTimer; // mutlak tavan: hiç hazır olmazsa yeniden yükle
+  Timer? _durmaTimer; // ilerleme DURDUYSA (asılı TCP) yeniden yükle
+  int _sonIlerleme = -1;
+  bool _yavasIpucu = false;
+  bool _arkaPlanda = false;
+  bool _oneGelinceDene = false;
+  bool _disposed = false;
+
+  static const int _canvasOtoDenemeTavani = 3;
+  static const Duration _yavasEsigi = Duration(seconds: 20);
+  // İlerleme yüzdesi bu kadar süre HİÇ değişmezse hat askıda sayılır (asılı TCP,
+  // captive portal). Yavaş ama akan indirme ilerlemeyi oynattığı için kesilmez.
+  static const Duration _durmaEsigi = Duration(seconds: 30);
+  // Mutlak tavan: ilerleme oynasa bile bu süre içinde el sıkışma gelmezse yenile.
+  static const Duration _zamanAsimi = Duration(seconds: 120);
+
+  // Playback state
+  bool _isPlaying = false;
+  bool _hasEnded = false;
+  DateTime? _bitisAni; // son 'ended' olayı (hemen ardından gelen bayat timeUpdate yutulur)
+  bool _kalemModu = false; // canvas kalem (işaretleme) modu açık mı — sistem geri hareketi için
+  // Oynatma hizi UI'i yok; ses her zaman 1.0x. Alan, ileride hiz kontrolu
+  // eklenirse tek dokunus noktasi olsun diye duruyor.
+  static const double _speed = 1.0;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _initWebView();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    WidgetsBinding.instance.removeObserver(this);
+    _postLoadErrorTimer?.cancel();
+    _tumZamanlayicilariIptalEt();
+    // Platform WebView'i rota kapanınca YOK EDİLMİYOR (platform-view dispose'u
+    // no-op): eski sayfa arkada yaşamaya, ses çalmaya ve zamanlayıcı döndürmeye
+    // devam ediyordu. Sayfayı boşa yönlendirmek pagehide/unload üretir → canvas
+    // sesi kilitler, belleği bırakır. Her çağrı korumalı: WebView çoktan
+    // ölmüşse sessizce geçilir.
+    try {
+      unawaited(_webViewController
+          .runJavaScript(
+              'try{if(window.MaarifX&&window.MaarifX.pause){window.MaarifX.pause();}}catch(e){}')
+          .catchError((_) {}));
+      unawaited(_webViewController
+          .loadRequest(Uri.parse('about:blank'))
+          .catchError((_) {}));
+    } catch (_) {}
+    unawaited(_audioService.stop().then((_) => _audioService.dispose()));
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _arkaPlanda = false;
+      if (_oneGelinceDene) {
+        _oneGelinceDene = false;
+        logD('[Player] öne gelindi → bekleyen yeniden deneme şimdi');
+        _yukle(sebep: 'resume');
+        return;
+      }
+      // Sayfa hazırdı: iOS arka planda WebView içerik sürecini öldürmüş olabilir
+      // (delegate çağrısı arka plandayken kaybolabiliyor) → yoklayarak karar ver.
+      if (_jsReady) _canlilikYokla(sebep: 'resume');
+      return;
+    }
+    // paused / inactive / hidden / detached: arka planda otomatik deneme YAPMA
+    // (pil + boşa istek); bekleyen denemeyi öne gelince çalıştır.
+    _arkaPlanda = true;
+    if (_yenidenDeneTimer != null) {
+      _yenidenDeneTimer?.cancel();
+      _yenidenDeneTimer = null;
+      _geriSayimTimer?.cancel();
+      _geriSayimTimer = null;
+      _oneGelinceDene = true;
+    }
+  }
+
+  // ─── WebView ────────────────────────────────────────
+
+  void _initWebView() {
+    _url = widget.isLive
+        ? AppConfig.canvasLiveUrl(widget.requestId, widget.token, widget.imageUrl)
+        : AppConfig.canvasReplayUrl(widget.requestId, widget.token);
+
+    // ─── DEBUG KİLİDİ ───
+    // WebView'in UZAKTAN İNCELENMESİ kapalı. Açık kalırsa USB'li bir cihazdan
+    // Android'de chrome://inspect, iOS'ta Safari Web Inspector ile canvas.html'in
+    // DOM'u, JS bağlamı, ağ trafiği ve URL'sindeki OTURUM JETONU okunabilir.
+    // Android'de release derlemesi zaten debuggable değil, iOS 16.4+ ise
+    // varsayılanı açık; ikisini de şansa bırakmadan açıkça kapatıyoruz.
+    // Yalnız RELEASE'te kapatılır: geliştirme sırasında canvas.html'i
+    // incelemek gerekiyor, kullanıcının elindeki APK'da ise asla.
+    // NOT: bu API bir Future döndürür — senkron try/catch onu YAKALAMAZ
+    // (ilk sürümdeki try/catch ölü koddu); hata `catchError` ile susturuluyor.
+    if (!kDebugMode && Platform.isAndroid) {
+      unawaited(
+        AndroidWebViewController.enableDebugging(false).catchError((_) {}),
+      );
+    }
+
+    // iOS: HTML5 Audio'nun kullanıcı jesti olmadan da başlayabilmesi için
+    // (canlı derste adım sesi kendiliğinden gelir). Android'de karşılığı
+    // aşağıdaki setMediaPlaybackRequiresUserGesture(false).
+    late final PlatformWebViewControllerCreationParams params;
+    if (WebViewPlatform.instance is WebKitWebViewPlatform) {
+      params = WebKitWebViewControllerCreationParams(
+        allowsInlineMediaPlayback: true,
+        mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
+      );
+    } else {
+      params = const PlatformWebViewControllerCreationParams();
+    }
+
+    _webViewController = WebViewController.fromPlatformCreationParams(
+      params,
+      onPermissionRequest: _webIzinIstegi,
+    )
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(Colors.black)
+      ..addJavaScriptChannel('FlutterChannel', onMessageReceived: _onJsMessage)
+      ..setNavigationDelegate(NavigationDelegate(
+        // GEZİNME BEYAZ LİSTESİ: bu WebView hem oturum jetonunu hem de
+        // FlutterChannel köprüsünü taşıyor. Sayfa (ya da içine sızan bir
+        // içerik) başka bir adrese giderse köprü ve jeton yabancı bir sayfaya
+        // açılmış olur. Yalnız kendi sunucumuza gezinmeye izin var; harici
+        // bağlantılar WebView içinde AÇILMAZ.
+        onNavigationRequest: (request) {
+          // YALNIZ ANA ÇERÇEVE kısıtlanır. Köprü ve jeton ana çerçeveye
+          // bağlıdır; alt kaynaklar (soru görseli, ses parçaları, css) bazı
+          // WebView sürümlerinde bu geri çağrıya düşüyor ve onları engellemek
+          // oynatıcıyı sessizce bozardı — güvenlik kazancı da yok.
+          if (!request.isMainFrame) return NavigationDecision.navigate;
+          if (_adresGuvenli(request.url)) return NavigationDecision.navigate;
+          // Engellenen ana-çerçeve yönlendirmesi (bakım sayfası, CDN, yanlış
+          // proxy): platform HİÇBİR geri çağrı üretmez → eskiden sonsuz spinner.
+          // Görünür hata + otomatik yeniden deneme (asıl adres geri gelebilir).
+          logD('[Player] ana çerçeve yönlendirmesi engellendi: ${request.url}');
+          Future.microtask(() =>
+              _yuklemeHatasi(_HataTuru.http, 'yönlendirme engellendi'));
+          return NavigationDecision.prevent;
+        },
+        onProgress: (int p) {
+          // İLERLEME BEKÇİSİ: yüzde oynadıkça askı sayacı sıfırlanır. Yavaş ama
+          // akan indirme kesilmez; hiç akmayan (asılı TCP) 30 sn'de yenilenir.
+          if (_jsReady || p == _sonIlerleme) return;
+          _sonIlerleme = p;
+          _durmaBekcisiKur();
+        },
+        onPageStarted: (String url) {
+          // Yeni bir ana-çerçeve yüklemesi başladı (bizim yeniden yüklememiz ya
+          // da canvas'ın kendi location.reload()'u): önceki el sıkışma geçersiz.
+          if (url.isEmpty || url.startsWith('about:')) return;
+          _jsReady = false;
+          _pageLoaded = false;
+        },
+        onPageFinished: (String finishedUrl) {
+          // ARA NAVIGASYON KORUMASI: bazi WebView surumleri gercek yuklemeden
+          // once about:blank icin de onPageFinished uretir. Erken _pageLoaded=true
+          // olursa ASIL yukleme hatasi yutulur -> siyah ekran, mesaj yok.
+          // NOT: Chromium kendi "sayfa yüklenemedi" hata sayfası için de bunu
+          // ateşler — bu yüzden BAŞARI ölçütü değildir (bkz. _jsReady).
+          if (finishedUrl.isEmpty || finishedUrl.startsWith('about:')) return;
+          _pageLoaded = true;
+          if (mounted && _hataTuru == null) setState(() => _isLoading = false);
+        },
+        onHttpError: (HttpResponseError error) {
+          // Ana çerçeve HTTP 4xx/5xx (ör. deploy sırasında nginx 502): eskiden
+          // hiç yakalanmıyordu, öğrenci WebView içinde çıplak "502 Bad Gateway"
+          // görüyordu. Yalnız canvas.html'in kendisi sayılır — favicon/alt
+          // kaynak 404'leri (request.uri farklı) buraya girmez.
+          final st = error.response?.statusCode ?? 0;
+          if (st < 400 || _jsReady) return;
+          if (!_anaCerceveMi(error.request?.uri)) return;
+          _yuklemeHatasi(_HataTuru.http, 'HTTP $st');
+        },
+        onWebResourceError: (error) {
+          // iOS: WebView içerik süreci öldü (bellek baskısı / arka plan) —
+          // sayfa bembeyaz kalır, tek çare yeniden yüklemek. Açıklaması BOŞ
+          // gelir (userInfo yok) → ekranda "Sayfa yüklenemedi:" olarak görünen
+          // vaka BUYDU. Anında (0,5 sn) yeniden yükle.
+          if (error.errorType ==
+              WebResourceErrorType.webContentProcessTerminated) {
+            _yuklemeHatasi(_HataTuru.motorOldu, 'içerik süreci sonlandı',
+                hemen: true);
+            return;
+          }
+          // BEYAZ/KARANLIK EKRAN FIX (2026-08-10): bu callback SADECE ana sayfa
+          // icin degil, HER alt kaynak icin (gorsel, css, font, ses) atesleniyor.
+          // Tek bir gecici /uploads ya da CDN hatasi, oynatici altta kendini
+          // toparlasa bile tam-ekran hata panelini kalici olarak aciyordu.
+          // Yalniz ana cerceve hatasi ve yalniz JS el sıkışmasından ONCE fatal
+          // sayilir. isForMainFrame null gelirse (bilinmiyor) FATAL kabul et —
+          // gercek bir ana-cerceve hatasini sessizce yutmayalim.
+          if (!(error.isForMainFrame ?? true)) return;
+          // iOS NSURLErrorCancelled (-999): yeni bir loadRequest eskisini iptal
+          // etti (bizim yeniden yüklememiz). Hata değil, yut.
+          if (error.errorCode == -999) return;
+          // Android: hata URL'i belliyse ve oynatıcı sayfası değilse
+          // (alt çerçeve/başka kaynak) ana çerçeve sayma.
+          if (error.url != null && !_anaCerceveMi(Uri.tryParse(error.url!))) {
+            return;
+          }
+          final ayrinti =
+              '${error.errorCode} ${error.description}'.trim();
+          if (!_jsReady) {
+            _yuklemeHatasi(_HataTuru.ag, ayrinti);
+            return;
+          }
+          // YUKLEME SONRASI ana-cerceve hatasi iki cok farkli sey olabilir:
+          //  (a) gecici bir kaynak/ag hickirigi — oynatici altta calismaya devam eder
+          //      (eski davranis: kalici tam-ekran panel = asil bug),
+          //  (b) WebView icerik surecinin OLMESI — sayfa gercekten olur, bembeyaz kalir.
+          // Kosulsuz 'return' (b)'yi de yutuyordu. Karari TAHMINLE degil YOKLAYARAK ver:
+          // sayfaya kucuk bir JS calistir; cevap gelirse (a), gelmezse (b).
+          _postLoadErrorTimer?.cancel();
+          _postLoadErrorTimer = Timer(const Duration(seconds: 3),
+              () => _canlilikYokla(sebep: ayrinti));
+        },
+      ));
+
+    // Allow audio autoplay without user gesture (Android)
+    final platform = _webViewController.platform;
+    if (platform is AndroidWebViewController) {
+      platform.setMediaPlaybackRequiresUserGesture(false);
+      // Sistem "Yazı boyutu" ayarı (fontScale %100-200) WebView'de tüm px
+      // fontları çarpıp oynatıcı düzenini bozuyordu (scrubber'ın ezilmesi).
+      // Oynatıcı kendi tipografisini yönetir — textZoom sabitlenir.
+      // (canvas.html sunucu tarafında da kendi telafisini yapar; bu satır
+      // yalnız yeni APK'larda ek güvence.)
+      platform.setTextZoom(100);
+    }
+    // iOS (WKWebView): Safari Web Inspector'a görünmesin — jeton ve köprü
+    // taşıyan bir sayfayı incelenebilir bırakmıyoruz. `isInspectable` yalnız
+    // iOS 16.4+ var; eski sürümlerde kanal hatası fırlatır ve beklenmediği
+    // için uygulamayı yakalanmamış async hatayla düşürürdü.
+    if (!kDebugMode && platform is WebKitWebViewController) {
+      unawaited(platform.setInspectable(false).catchError((_) {}));
+    }
+
+    _yukle(sebep: 'ilk açılış');
+  }
+
+  /// Oynatıcının basılı-tut mikrofonu (P57 sesli soru) sayfada getUserMedia ister.
+  /// YALNIZ mikrofon verilir (kamera vb. reddedilir); sayfa zaten yalnız kendi
+  /// sunucumuzdan yüklenebiliyor (gezinme beyaz listesi). Android'de WebView izni
+  /// uygulamanın RECORD_AUDIO çalışma-anı iznine bağlı → önce sistem sorulur.
+  /// iOS'ta sistem mikrofon penceresini WKWebView kendisi gösterir (Info.plist
+  /// NSMicrophoneUsageDescription). İzin yoksa sayfa yazarak sormaya düşer.
+  Future<void> _webIzinIstegi(WebViewPermissionRequest istek) async {
+    final yalnizMik = istek.types.isNotEmpty &&
+        istek.types.every((t) => t == WebViewPermissionResourceType.microphone);
+    if (!yalnizMik) {
+      await istek.deny();
+      return;
+    }
+    if (Platform.isAndroid) {
+      final durum = await Permission.microphone.request();
+      if (!durum.isGranted) {
+        await istek.deny();
+        return;
+      }
+    }
+    await istek.grant();
+  }
+
+  /// Verilen adres oynatıcı sayfasının kendisi mi (alt kaynak değil)?
+  bool _anaCerceveMi(Uri? u) {
+    if (u == null) return true; // bilinmiyor → ana çerçeve say (yutma)
+    return u.path.endsWith('/canvas.html');
+  }
+
+  /// Oynatıcı WebView'inin gitmesine izin verilen adres mi?
+  ///
+  /// Yalnız kendi API kökümüz. Boş adres ve `about:` (bazı WebView sürümleri
+  /// gerçek yüklemeden önce `about:blank` için de geri çağrı üretir) serbest;
+  /// onların dışında her şey (harici bağlantı, reklam, yönlendirme) engellenir —
+  /// FlutterChannel köprüsü ve URL'deki oturum jetonu yabancı bir sayfaya
+  /// asla taşınmaz.
+  bool _adresGuvenli(String url) {
+    if (url.isEmpty || url.startsWith('about:')) return true;
+    final hedef = Uri.tryParse(url);
+    final kok = Uri.tryParse(AppConfig.apiUrl);
+    if (hedef == null || kok == null) return false;
+    return hedef.scheme == kok.scheme &&
+        hedef.host == kok.host &&
+        hedef.port == kok.port;
+  }
+
+  // ─── Yükleme / yeniden deneme ─────────────────────────
+
+  void _tumZamanlayicilariIptalEt() {
+    _yenidenDeneTimer?.cancel();
+    _yenidenDeneTimer = null;
+    _geriSayimTimer?.cancel();
+    _geriSayimTimer = null;
+    _yavasTimer?.cancel();
+    _yavasTimer = null;
+    _zamanAsimiTimer?.cancel();
+    _zamanAsimiTimer = null;
+    _durmaTimer?.cancel();
+    _durmaTimer = null;
+  }
+
+  /// Askı bekçisi: ilerleme değişmeden [_durmaEsigi] geçerse yükleme askıda sayılır.
+  void _durmaBekcisiKur() {
+    _durmaTimer?.cancel();
+    _durmaTimer = Timer(_durmaEsigi, () {
+      if (_disposed || !mounted || _jsReady) return;
+      _yuklemeHatasi(_HataTuru.zamanAsimi,
+          'ilerleme %$_sonIlerleme${_pageLoaded ? ' (belge geldi, oynatıcı kalkmadı)' : ''}');
+    });
+  }
+
+  /// Sayfa hazır mı? (iOS'ta ölü içerik süreci JS çalıştıramaz → yeniden yükle.)
+  Future<void> _canlilikYokla({required String sebep}) async {
+    // TOLERANS (2026-09-05): 3 sn'lik TEK yoklama, ağır tuval işi (16 Mpx yeniden basım,
+    // kalem mürekkep çıkarma) ya da Android'in arka plandan dönüşte WebView'i geç
+    // uyandırması yüzünden YANLIŞ "motor öldü" kararı verip sayfayı yeniden yüklüyordu
+    // (izleyici "Çözümü İzle" ekranına geri atılıyor, ilerleme kayboluyordu).
+    // Artık 8 sn + 2 sn sonra ikinci şans; iki yoklama da cevapsızsa yeniden yükle.
+    var alive = await _yokla(const Duration(seconds: 8));
+    if (!alive && !_disposed && mounted) {
+      await Future.delayed(const Duration(seconds: 2));
+      if (_disposed || !mounted) return;
+      alive = await _yokla(const Duration(seconds: 8));
+    }
+    if (alive || _disposed || !mounted) return;
+    logD('[Player] canlılık yoklaması başarısız ($sebep) → yeniden yükleme');
+    _yuklemeHatasi(_HataTuru.motorOldu, 'yoklama: $sebep', hemen: true);
+  }
+
+  Future<bool> _yokla(Duration sure) async {
+    try {
+      final r = await _webViewController
+          .runJavaScriptReturningResult('1+1')
+          .timeout(sure);
+      return r.toString().contains('2');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Sayfayı (yeniden) yükler. Tüm giriş yolları buradan geçer: ilk açılış,
+  /// otomatik deneme, "Tekrar Dene", öne gelme.
+  void _yukle({required String sebep}) {
+    if (_disposed || !mounted) return;
+    _tumZamanlayicilariIptalEt();
+    _yuklemeDenemesi++;
+    _jsReady = false;
+    _pageLoaded = false;
+    _yavasIpucu = false;
+    _sonIlerleme = -1;
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+      _hataTuru = null;
+      _hataAyrinti = null;
+      _hataYenidenDenenebilir = true;
+      _geriSayim = 0;
+    });
+    logD('[Player] yükleme #$_yuklemeDenemesi ($sebep)');
+    // Aynı URL'e loadRequest: Android'de hata sayfasından da asıl adresi
+    // yeniden ister; iOS'ta uçuştaki yükleme -999 ile iptal olur (yutuluyor).
+    // Yeniden yüklemede canvas'a `devam=1`: kaydettiği kareden sürsün (ilk açılışta yok).
+    final hedef = _yuklemeDenemesi > 1 ? _devamUrl(_url, sebep) : _url;
+    unawaited(_webViewController.loadRequest(Uri.parse(hedef)).catchError((e) {
+      logD('[Player] loadRequest hatası: $e');
+    }));
+    // Yavaş hat ipucu: spinner sürerken "Tekrar Dene" sunulur (asılı TCP'de
+    // Chromium dakikalarca hata üretmeyebilir).
+    _yavasTimer = Timer(_yavasEsigi, () {
+      if (_disposed || !mounted || _jsReady) return;
+      setState(() => _yavasIpucu = true);
+    });
+    // Hiç hazır olmazsa mutlak tavan → yeniden yükle (geri çekilmeli).
+    _zamanAsimiTimer = Timer(_zamanAsimi, () {
+      if (_disposed || !mounted || _jsReady) return;
+      _yuklemeHatasi(_HataTuru.zamanAsimi, '${_zamanAsimi.inSeconds} sn');
+    });
+    // İlerleme hiç gelmezse de askı sayılır (onProgress ilk yüzdeyle sıfırlar).
+    _durmaBekcisiKur();
+  }
+
+  // Kara kutu (2026-09-05): yeniden yükleme NEDENİ (motorOldu / yoklama / zaman aşımı / elle…),
+  // bu penceredeki motor ölümü sayısı ve deneme numarası canvas'a gider; canvas 'acilis' olayında
+  // VDS'e raporlar → Android'de de "neden yeniden yüklendi" sahada görülür.
+  String _devamUrl(String u, String sebep) {
+    final q = 'devam=1&neden=${Uri.encodeQueryComponent(sebep)}'
+        '&olum=$_motorOlumSayisi&deneme=$_yuklemeDenemesi';
+    return u.contains('?') ? '$u&$q' : '$u?$q';
+  }
+
+  /// Otomatik deneme gecikmesi: ağ hataları için sınırsız ama tavanlı geri
+  /// çekilme (ekran açık kaldığı sürece dener); canvas hataları için sınırlı.
+  Duration _otoGecikme(_HataTuru tur) {
+    if (tur == _HataTuru.canvas) {
+      const sn = [6, 15, 30];
+      return Duration(seconds: sn[(_canvasOtoDeneme - 1).clamp(0, sn.length - 1)]);
+    }
+    const sn = [3, 5, 8, 12, 20, 30];
+    return Duration(seconds: sn[(_otoDenemeSayisi - 1).clamp(0, sn.length - 1)]);
+  }
+
+  /// Bir yükleme hatası oldu: paneli göster, politikaya göre otomatik denemeyi kur.
+  void _yuklemeHatasi(_HataTuru tur, String ayrinti, {bool hemen = false}) {
+    if (_disposed || !mounted) return;
+    if (tur == _HataTuru.motorOldu && hemen) {
+      // İçerik süreci öldü (iOS'ta bellek/jetsam; oynatma ortasında olabilir):
+      // kırmızı panel GÖSTERME — spinner ile hemen yeniden yükle, canvas kaldığı
+      // kareden sürer (devam=1). 5 dk içinde 3'ten fazla ölürse panele düş.
+      final simdi = DateTime.now();
+      if (_sonMotorOlumu == null ||
+          simdi.difference(_sonMotorOlumu!) > _motorOlumPenceresi) {
+        _motorOlumSayisi = 0;
+      }
+      _sonMotorOlumu = simdi;
+      if (_motorOlumSayisi < _motorOlumTavani) {
+        _motorOlumSayisi++;
+        logD('[Player] içerik süreci öldü ($ayrinti) → sessiz yükleme #$_motorOlumSayisi');
+        _yukle(sebep: 'motorOldu');
+        return;
+      }
+    }
+    _tumZamanlayicilariIptalEt();
+    _postLoadErrorTimer?.cancel();
+    String mesaj;
+    switch (tur) {
+      case _HataTuru.ag:
+        mesaj = 'İnternet bağlantısı kurulamadı.';
+      case _HataTuru.http:
+        mesaj = 'Sunucu şu anda yanıt veremiyor.';
+      case _HataTuru.zamanAsimi:
+        mesaj = 'Sayfa çok yavaş yükleniyor.';
+      case _HataTuru.motorOldu:
+        mesaj = 'Oynatıcı yanıt vermiyor.';
+      case _HataTuru.canvas:
+        mesaj = ayrinti;
+        ayrinti = '';
+    }
+    logD('[Player] hata (${tur.name}): $mesaj $ayrinti');
+    setState(() {
+      _isLoading = false;
+      _hataTuru = tur;
+      _errorMessage = mesaj;
+      _hataAyrinti = ayrinti.isEmpty ? null : ayrinti;
+      _hataYenidenDenenebilir = true;
+      _yavasIpucu = false;
+    });
+    if (tur == _HataTuru.canvas) {
+      _canvasOtoDeneme++;
+      if (_canvasOtoDeneme > _canvasOtoDenemeTavani) {
+        // Deterministik görünen canvas hatası: sunucuyu dövme, elle deneme kalır.
+        return;
+      }
+    } else {
+      _otoDenemeSayisi++;
+    }
+    _otoDenemeKur(hemen ? const Duration(milliseconds: 500) : _otoGecikme(tur));
+  }
+
+  void _otoDenemeKur(Duration gecikme) {
+    if (_disposed || !mounted) return;
+    if (_arkaPlanda) {
+      _oneGelinceDene = true;
+      return;
+    }
+    _yenidenDeneTimer?.cancel();
+    _geriSayimTimer?.cancel();
+    _geriSayim = gecikme.inSeconds;
+    if (_geriSayim > 0) {
+      _geriSayimTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+        if (_disposed || !mounted) {
+          t.cancel();
+          return;
+        }
+        setState(() => _geriSayim = (_geriSayim - 1).clamp(0, 999));
+      });
+    }
+    _yenidenDeneTimer = Timer(gecikme, () => _yukle(sebep: 'otomatik'));
+    if (mounted) setState(() {});
+  }
+
+  /// canvas.html'in bildirdiği hata (event:'error'). Panel + SINIRLI otomatik
+  /// yeniden yükleme; canvas kendini toparlarsa (ready/stepRendered/...) panel
+  /// ve bekleyen deneme kalkar. `retryable:false` gelirse yalnız elle.
+  void _canvasHatasi(String mesaj, {bool yenidenDenenebilir = true}) {
+    if (_disposed || !mounted) return;
+    if (!yenidenDenenebilir) {
+      _tumZamanlayicilariIptalEt();
+      setState(() {
+        _isLoading = false;
+        _hataTuru = _HataTuru.canvas;
+        _errorMessage = mesaj;
+        _hataAyrinti = null;
+        _hataYenidenDenenebilir = false;
+      });
+      return;
+    }
+    _yuklemeHatasi(_HataTuru.canvas, mesaj);
+  }
+
+  /// Oynatıcıdan sağlıklı sinyal geldi: hata paneli ve bekleyen deneme kalkar.
+  void _hataTemizle() {
+    _yenidenDeneTimer?.cancel();
+    _yenidenDeneTimer = null;
+    _geriSayimTimer?.cancel();
+    _geriSayimTimer = null;
+    _oneGelinceDene = false;
+    if (_errorMessage != null || _hataTuru != null) {
+      setState(() {
+        _errorMessage = null;
+        _hataTuru = null;
+        _hataAyrinti = null;
+        _geriSayim = 0;
+      });
+    }
+  }
+
+  void _jsHazir() {
+    if (_jsReady) return;
+    _jsReady = true;
+    _otoDenemeSayisi = 0;
+    // NOT: _canvasOtoDeneme BURADA sıfırlanmaz — canvas her yeniden yüklemede
+    // 'ready' gönderir; sayaç burada sıfırlansa deterministik bir canvas hatası
+    // (401, eksik oturum) sonsuz 6 sn'lik yeniden yükleme döngüsüne girer
+    // (emülatörde ölçüldü). Yalnız GERÇEK içerik sinyali sıfırlar (_onJsMessage).
+    _yavasTimer?.cancel();
+    _yavasTimer = null;
+    _zamanAsimiTimer?.cancel();
+    _zamanAsimiTimer = null;
+    _durmaTimer?.cancel();
+    _durmaTimer = null;
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+        _yavasIpucu = false;
+      });
+    }
+  }
+
+  // ─── JS Messages ───────────────────────────────────
+
+  void _onJsMessage(JavaScriptMessage message) {
+    try {
+      final data = jsonDecode(message.message) as Map<String, dynamic>;
+      final event = data['event'] as String? ?? '';
+      // KURTARMA FIX (2026-08-10): _errorMessage bir kez set edilince ASLA
+      // temizlenmiyordu → gecici bir hatanin paneli, oynatici altta calismaya
+      // devam etse bile ekrani kalici kapatiyordu. Oynaticidan saglikli bir
+      // ilerleme sinyali gelirse panel (ve bekleyen otomatik deneme) kalkar.
+      const recoverySignals = {'imageLoaded', 'ready', 'stepRendered', 'timeUpdate', 'stepChange', 'sessionLoaded', 'renderComplete'};
+      if (recoverySignals.contains(event)) {
+        _jsHazir();
+        // Gerçek içerik geldi (yalnız 'ready' değil): canvas hata sayacı sıfırlanır.
+        if (event != 'ready') _canvasOtoDeneme = 0;
+        if (_errorMessage != null || _yenidenDeneTimer != null) _hataTemizle();
+      }
+      switch (event) {
+        case 'imageLoaded':
+          _handleImageLoaded(data);
+        case 'timeUpdate':
+          _handleTimeUpdate(data);
+        case 'audioPlay':
+          _handleAudioPlay(data);
+        case 'audioPause':
+          _audioService.pause();
+        case 'audioSeek':
+          _audioService.seek((data['time'] as num?)?.toInt() ?? 0);
+        case 'ended':
+          _bitisAni = DateTime.now();
+          if (mounted) setState(() { _hasEnded = true; _isPlaying = false; });
+          _audioService.pause();
+        case 'markStarted':
+          _kalemModu = true;
+        case 'markEnded':
+          _kalemModu = false;
+        case 'error':
+          _canvasHatasi(
+            data['message'] as String? ?? 'Hata',
+            yenidenDenenebilir: data['retryable'] != false,
+          );
+        case 'ready':
+          if (mounted) setState(() => _isLoading = false);
+        case 'annotationSend':
+          _handleAnnotationSend(data);
+        case 'markedContent':
+          _handleMarkedContent(data);
+        case 'hintAnswer':
+          _handleHintAnswer(data);
+        case 'closeRequest':
+          // Canvas icindeki "Çözüme Bak" butonu — X'e basmakla ayni: ekrani kapat
+          _kapat();
+      }
+    } catch (e) {
+      logD('[Player] JS parse error: $e');
+    }
+  }
+
+  Future<void> _handleAnnotationSend(Map<String, dynamic> data) async {
+    final base64Str = data['screenshotBase64'] as String? ?? '';
+    final text = data['text'] as String? ?? '';
+    if (base64Str.isEmpty && text.isEmpty) return;
+
+    try {
+      // Save base64 as temp file (boş base64 → boş/bozuk görsel gönderme)
+      File? tempFile;
+      if (base64Str.isNotEmpty) {
+        final Uint8List bytes = base64Decode(base64Str);
+        final tempDir = await getTemporaryDirectory();
+        tempFile = File(
+          '${tempDir.path}/annotation_${DateTime.now().millisecondsSinceEpoch}.png',
+        );
+        await tempFile.writeAsBytes(bytes);
+      }
+
+      // Pop with result
+      _kapat(AnnotationResult(imageFile: tempFile, text: text));
+    } catch (e) {
+      logD('[Player] Annotation save error: $e');
+    }
+  }
+
+  // İşaretli bölge (canvas kalemle): markedRegion [x1,y1,x2,y2] 0-1000 + not.
+  // Backend bunu önceki tur DSL'inden <isaretli_icerik>'e çözer; not → <ogrenci_sorusu>.
+  void _handleMarkedContent(Map<String, dynamic> data) {
+    final note = data['note'] as String? ?? '';
+    final raw = data['markedRegion'];
+    List<int>? region;
+    if (raw is List && raw.length == 4) {
+      region = raw.map((e) => (e as num).toInt()).toList();
+    }
+    // region null OLABİLİR (çizmeden düz takip sorusu) — eskiden burada return edilip
+    // NOT DAHİL her şey sessizce düşüyordu ("gönderdim, hiçbir şey olmadı" bug'ı).
+    // Not boşsa gönderilecek bir şey yok; not varsa region'sız da geçerli takip sorusudur.
+    if (note.trim().isEmpty && region == null) return;
+    _kapat(AnnotationResult(text: note, markedRegion: region));
+  }
+
+  // Hint yanıtı: hintRef + text (yanıt). skip=true → canvas zaten "Cevap vermek istemiyorum" yollar.
+  void _handleHintAnswer(Map<String, dynamic> data) {
+    final hintRef = data['hintRef'] as String? ?? '';
+    final text = data['text'] as String? ?? '';
+    final skip = data['skip'] as bool? ?? false;
+    _kapat(AnnotationResult(text: text, hintRef: hintRef.isNotEmpty ? hintRef : null, skip: skip));
+  }
+
+  void _handleImageLoaded(Map<String, dynamic> data) {
+    if (!mounted) return;
+    final w = (data['width'] as num?)?.toInt() ?? 0;
+    final h = (data['height'] as num?)?.toInt() ?? 0;
+    if (w > 0 && h > 0) {
+      setState(() => _isLoading = false);
+      // Oryantasyon YALNIZ ilk görselde kilitlenir: sunucu ders ortasında
+      // aynı görseli (catch-up) veya EXIF'i düzeltilmiş _clean kopyayı yeniden
+      // gönderebiliyor — boyut ekseni değişirse ekran çözüm ortasında zorla
+      // dönüyordu (canvas resize + scrubber zıplaması).
+      if (_orientationSet) return;
+      _orientationSet = true;
+      if (w > h) {
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight,
+        ]);
+      } else {
+        SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+      }
+    }
+  }
+
+  void _handleTimeUpdate(Map<String, dynamic> data) {
+    if (!mounted) return;
+    final ct = (data['currentTime'] as num?)?.toDouble() ?? 0;
+    // BİTİŞ KATMANI SIFIRLAMA (2026-09-05): oynatıcı sona gelince Flutter ortaya "yeniden
+    // oynat" düğmesi koyar ve bunu YALNIZ o düğme kaldırıyordu. Kullanıcı canvas'ın kendi
+    // ▶'ine bassa ya da çubuğu geri çekse video akarken düğme ekranın ortasında kalıyor;
+    // basınca seek(0) ile baştan başlatıp izleyiciyi "aynı sayfaya geri atıyordu".
+    // Oynatıcıdan gerçek ilerleme gelince katman kalkar (bitişten hemen sonraki bayat
+    // timeUpdate yutulur).
+    if (_hasEnded && ct > 0) {
+      final b = _bitisAni;
+      if (b == null || DateTime.now().difference(b).inMilliseconds > 800) {
+        setState(() { _hasEnded = false; _isPlaying = true; });
+      }
+      return;
+    }
+    if (!_isPlaying && ct > 0 && !_hasEnded) {
+      setState(() => _isPlaying = true);
+    }
+  }
+
+  void _handleAudioPlay(Map<String, dynamic> data) {
+    final url = data['url'] as String?;
+    if (_hasEnded && mounted) setState(() { _hasEnded = false; _isPlaying = true; });
+    if (url != null && url.isNotEmpty) {
+      _audioService.play(url, startTimeMs: (data['startTime'] as num?)?.toInt() ?? 0);
+      _audioService.setSpeed(_speed);
+    }
+  }
+
+  // ─── Kapanış (TEK kapı) ─────────────────────────────
+  // ÇİFT POP KORUMASI (2026-09-03): pop() hem JS olaylarından (closeRequest,
+  // markedContent, hintAnswer, annotationSend) hem iki Flutter düğmesinden
+  // geliyordu ve yalnız `mounted`a bakıyordu. Çıkış animasyonu (~300 ms) sürerken
+  // gelen ikinci pop() ALTTAKİ ChatScreen'i düşürüp simsiyah boş bir navigator
+  // bırakıyordu (canvas plain-modda closeRequest'i iki kez gönderebiliyor).
+  bool _kapatildi = false;
+  void _kapat([Object? sonuc]) {
+    if (_kapatildi || !mounted) return;
+    _kapatildi = true;
+    final nav = Navigator.of(context);
+    if (nav.canPop()) nav.pop(sonuc);
+  }
+
+  // ─── Controls ───────────────────────────────────────
+
+  void _togglePlayPause() {
+    if (_hasEnded) {
+      // Yalnız play(): oynatıcı son karedeyse kendisi baştan başlar. Eski 'seek(0); play()'
+      // ikilisi iki oynatma başlatıcısını yarıştırıyor, kimi cihazda oynatma hemen
+      // duruyordu ("videoyu aç → basınca yine aynı sayfa, 3. denemede izleniyor").
+      _webViewController.runJavaScript('MaarifX.play();');
+      setState(() { _hasEnded = false; _isPlaying = true; });
+      _audioService.seek(0);
+    } else if (_isPlaying) {
+      _webViewController.runJavaScript('MaarifX.pause();');
+      setState(() => _isPlaying = false);
+      _audioService.pause();
+    } else {
+      _webViewController.runJavaScript('MaarifX.play();');
+      setState(() => _isPlaying = true);
+    }
+  }
+
+  void _goBack() async {
+    if (widget.isLive) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF1C2129),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Canlı çözüm devam ediyor', style: TextStyle(color: Colors.white)),
+          content: const Text('Çıkmak istediğinize emin misiniz?', style: TextStyle(color: Colors.white70)),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('İptal')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Çık', style: TextStyle(color: AppTheme.danger)),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    _kapat();
+  }
+
+  // ─── Sistem geri (Android kenar kaydırma / geri tuşu) ─────────────────
+  // (2026-09-05) Rota PopScope'suzdu: Android'de kenardan kaydırma (kalemle çizerken,
+  // çubuğu tutarken sık) rotayı ONAYSIZ düşürüyordu → "izlerken chatin ana sayfasına
+  // atıyor". Artık: kalem modu açıksa önce kalem kapanır; canlı derste onay sorulur;
+  // tekrarda kapanır (tek kapı _kapat).
+  void _sistemGeri() {
+    if (_kalemModu) {
+      _kalemModu = false;
+      unawaited(_webViewController
+          .runJavaScript(
+              'try{if(window.MaarifX&&window.MaarifX.exitAnnotation){window.MaarifX.exitAnnotation();}}catch(e){}')
+          .catchError((_) {}));
+      return;
+    }
+    _goBack();
+  }
+
+  // ─── Build ──────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (didPop) return;
+        _sistemGeri();
+      },
+      child: Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          // WebView
+          WebViewWidget(controller: _webViewController),
+
+          // Loading
+          if (_isLoading) _buildLoading(),
+
+          // Error
+          if (_errorMessage != null) _buildError(),
+
+          // Ended overlay (replay)
+          if (_hasEnded && !widget.isLive) _buildEndedOverlay(),
+
+          // Top gradient (visual only – does NOT block WebView touches)
+          Positioned(
+            top: 0, left: 0, right: 0,
+            child: IgnorePointer(
+              child: Container(
+                height: MediaQuery.of(context).padding.top + 56,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.black.withOpacity(0.7), Colors.transparent],
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // Back button (only this absorbs touches)
+          Positioned(
+            top: 0, left: 0,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Material(
+                  color: Colors.black38,
+                  borderRadius: BorderRadius.circular(24),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(24),
+                    onTap: _goBack,
+                    child: const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: Icon(Icons.arrow_back_rounded, color: Colors.white, size: 26),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+        ],
+      ),
+      ),
+    );
+  }
+
+  Widget _buildLoading() {
+    final yeniden = _yuklemeDenemesi > 1;
+    return Container(
+      color: Colors.black,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(
+              width: 40, height: 40,
+              child: CircularProgressIndicator(
+                strokeWidth: 3,
+                valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primary),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              yeniden ? 'Yeniden bağlanılıyor...' : 'Yükleniyor...',
+              style: const TextStyle(color: Colors.white54, fontSize: 14),
+            ),
+            if (_yavasIpucu) ...[
+              const SizedBox(height: 18),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 32),
+                child: Text(
+                  'Bağlantı yavaş görünüyor. Bekleyebilir ya da yeniden deneyebilirsiniz.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white38, fontSize: 13),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextButton.icon(
+                onPressed: () => _yukle(sebep: 'yavaş-elle'),
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('Tekrar Dene'),
+                style: TextButton.styleFrom(foregroundColor: AppTheme.primaryLight),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildError() {
+    final otoBekliyor = _yenidenDeneTimer != null;
+    return Container(
+      color: Colors.black87,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline_rounded, color: AppTheme.danger, size: 56),
+              const SizedBox(height: 16),
+              Text(
+                _errorMessage!,
+                style: const TextStyle(color: Colors.white70, fontSize: 15),
+                textAlign: TextAlign.center,
+              ),
+              if (_hataYenidenDenenebilir) ...[
+                const SizedBox(height: 8),
+                Text(
+                  otoBekliyor
+                      ? 'Bağlantı gelince otomatik denenecek (${_geriSayim > 0 ? '$_geriSayim sn' : 'şimdi'})'
+                      : 'İnternet bağlantınızı kontrol edip tekrar deneyin.',
+                  style: const TextStyle(color: Colors.white38, fontSize: 13),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+              if (_hataAyrinti != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  _hataAyrinti!,
+                  style: const TextStyle(color: Colors.white24, fontSize: 11),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+              const SizedBox(height: 24),
+              Wrap(
+                spacing: 12,
+                runSpacing: 10,
+                alignment: WrapAlignment.center,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: () => _yukle(sebep: 'elle'),
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('Tekrar Dene'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primary,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () => _kapat(),
+                    icon: const Icon(Icons.arrow_back),
+                    label: const Text('Geri Dön'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white70,
+                      side: const BorderSide(color: Colors.white24),
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEndedOverlay() {
+    return Center(
+      child: GestureDetector(
+        onTap: _togglePlayPause,
+        child: Container(
+          width: 80, height: 80,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: AppTheme.primary,
+            boxShadow: [
+              BoxShadow(color: AppTheme.primary.withOpacity(0.4), blurRadius: 24, spreadRadius: 4),
+            ],
+          ),
+          child: const Icon(Icons.replay_rounded, color: Colors.white, size: 40),
+        ),
+      ),
+    );
+  }
+
+
+}

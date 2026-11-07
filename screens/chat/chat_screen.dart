@@ -24,6 +24,8 @@ import '../../services/vds_service.dart' show SendMessageResult;
 import '../settings/privacy_policy_screen.dart';
 import '../../widgets/common/server_notice_dialog.dart';
 import '../../widgets/common/class_level_sheet.dart';
+import '../../widgets/common/duyuru_karti.dart';
+import '../../services/uzak_ayarlar.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -52,9 +54,31 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initShareIntent();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initAuth();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _initAuth();
+      _duyuruGoster();
     });
+  }
+
+  // DUYURU (2026-11-08): admin panelinden yazılan "yeni bir şey yayınladık"
+  // kartı — açılışta görülmemiş en yeni duyuru BİR KEZ. Zorunlu güncelleme
+  // kilidi açıksa ya da üstte başka bir ekran/diyalog varsa gösterilmez
+  // (bir sonraki açılışa kalır).
+  bool _duyuruBakildi = false;
+  Future<void> _duyuruGoster() async {
+    if (_duyuruBakildi) return;
+    _duyuruBakildi = true;
+    final uzak = context.read<UzakAyarlar?>();
+    if (uzak == null) return;
+    final token = context.read<AuthProvider>().token;
+    await Future.delayed(const Duration(milliseconds: 1200));
+    final d = await uzak.siradakiDuyuru(token: token);
+    if (d == null || !mounted) return;
+    if (uzak.guncelleme?.zorunlu == true) return;
+    if (!(ModalRoute.of(context)?.isCurrent ?? false) || _noticeInFlight) return;
+    await uzak.duyuruGoruldu(d.id);
+    if (!mounted) return;
+    await showDuyuru(context, d);
   }
 
   void _initShareIntent() {
@@ -193,11 +217,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             ),
             const SizedBox(height: 16),
             GestureDetector(
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const PrivacyPolicyScreen()),
-                );
-              },
+              onTap: () => gizlilikPolitikasiniAc(context),
               child: const Text(
                 'Gizlilik Politikasını İncele',
                 style: TextStyle(

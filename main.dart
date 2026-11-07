@@ -9,6 +9,8 @@ import 'providers/theme_provider.dart';
 import 'screens/splash_screen.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
+import 'services/uzak_ayarlar.dart';
+import 'widgets/common/guncelleme_kapisi.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -41,6 +43,11 @@ class MaarifxApp extends StatelessWidget {
         ChangeNotifierProvider(
           create: (_) => ThemeProvider(),
         ),
+        // Uzaktan ayarlar (model adı, zorunlu güncelleme, gizlilik, duyurular):
+        // açılışta hemen çekilir; hata uygulamayı durdurmaz.
+        ChangeNotifierProvider(
+          create: (_) => UzakAyarlar()..yukle(zorla: true),
+        ),
       ],
       child: Consumer<ThemeProvider>(
         builder: (context, themeProvider, _) {
@@ -66,6 +73,10 @@ class MaarifxApp extends StatelessWidget {
               darkTheme: AppTheme.darkTheme,
               themeMode: themeProvider.themeMode,
               home: const SplashScreen(),
+              // Zorunlu güncelleme kilidi + isteğe bağlı güncelleme kartı: TÜM
+              // ekranların (ve diyalogların) üstünde.
+              builder: (context, child) =>
+                  GuncellemeKapisi(child: child ?? const SizedBox.shrink()),
               // Adlandırılmış rotalar: SUNUCU bildirim butonu (NoticeAction kind:route)
               // uygulama-içi bir yola gidebilsin diye. Bunlar tanımlı olmadan
               // runNoticeAction'daki pushNamed başarısız oluyordu (ör. misafir

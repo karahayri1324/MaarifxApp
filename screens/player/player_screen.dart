@@ -13,6 +13,7 @@ import '../../config/app_config.dart';
 import '../../config/theme.dart';
 import '../../services/audio_service.dart';
 import '../../config/log.dart';
+import '../../widgets/common/cozum_degerlendirme_sheet.dart';
 
 /// PlayerScreen'den dönen takip-turu verisi.
 /// - Ekran görüntüsüyle soru (legacy): imageFile + text.
@@ -121,6 +122,12 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _hasEnded = false;
   DateTime? _bitisAni; // son 'ended' olayı (hemen ardından gelen bayat timeUpdate yutulur)
   bool _kalemModu = false; // canvas kalem (işaretleme) modu açık mı — sistem geri hareketi için
+  // ÇÖZÜM DEĞERLENDİRMESİ (2026-11-08): çözüm en az [_izlemeEsigiMs] izlendiyse çıkışta
+  // 1-5 puan paneli sorulur (istek başına bir kez). Ölçüt canvas'ın timeUpdate'i —
+  // canvas.html'e yeni olay EKLENMEDİ.
+  bool _izlendi = false;
+  bool _anketAcik = false;
+  static const int _izlemeEsigiMs = 3000;
   // Oynatma hizi UI'i yok; ses her zaman 1.0x. Alan, ileride hiz kontrolu
   // eklenirse tek dokunus noktasi olsun diye duruyor.
   static const double _speed = 1.0;
@@ -781,6 +788,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   void _handleTimeUpdate(Map<String, dynamic> data) {
     if (!mounted) return;
     final ct = (data['currentTime'] as num?)?.toDouble() ?? 0;
+    if (ct >= _izlemeEsigiMs) _izlendi = true;
     // BİTİŞ KATMANI SIFIRLAMA (2026-09-05): oynatıcı sona gelince Flutter ortaya "yeniden
     // oynat" düğmesi koyar ve bunu YALNIZ o düğme kaldırıyordu. Kullanıcı canvas'ın kendi
     // ▶'ine bassa ya da çubuğu geri çekse video akarken düğme ekranın ortasında kalıyor;
@@ -843,6 +851,21 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _goBack() async {
+    if (_anketAcik || _kapatildi) return;
+    // Değerlendirme paneli: çözüm izlendiyse ve bu istek daha önce sorulmadıysa.
+    // Panel canlı dersteki "çıkmak istediğinize emin misiniz?" onayının da yerini
+    // tutar: kapatmak (geri / aşağı kaydırma) = oynatıcıda kal, iki buton = çık.
+    if (_izlendi) {
+      _anketAcik = true; // prefs okunurken ikinci dokunuş ikinci paneli açmasın
+      final sor = await CozumDegerlendirme.sorulmaliMi(widget.requestId);
+      _anketAcik = false;
+      if (!mounted || _kapatildi) return;
+      if (sor) {
+        await _degerlendirmeSor();
+        return;
+      }
+    }
+    if (!mounted) return;
     if (widget.isLive) {
       final ok = await showDialog<bool>(
         context: context,
@@ -861,6 +884,32 @@ class _PlayerScreenState extends State<PlayerScreen>
         ),
       );
       if (ok != true) return;
+    }
+    _kapat();
+  }
+
+  Future<void> _degerlendirmeSor() async {
+    _anketAcik = true;
+    // Panel açıkken anlatım arkada sürmesin (vazgeçerse ▶ ile devam eder). Koşulsuz:
+    // _isPlaying canvas'ın kendi ⏸'sini bilmiyor; MaarifX.pause() duraklıyken zararsız.
+    unawaited(_webViewController
+        .runJavaScript('try{if(window.MaarifX&&window.MaarifX.pause){window.MaarifX.pause();}}catch(e){}')
+        .catchError((_) {}));
+    _audioService.pause();
+    if (mounted) setState(() => _isPlaying = false);
+    final sonuc = await showCozumDegerlendirmeSheet(context);
+    _anketAcik = false;
+    if (sonuc == null || !mounted) return; // vazgeçti → oynatıcıda kal, sonra yine sorulur
+    unawaited(CozumDegerlendirme.isaretle(widget.requestId));
+    if (!sonuc.gecildi) {
+      // Ağı BEKLEMEDEN çık; gönderim arka planda sürer.
+      unawaited(CozumDegerlendirme.gonder(
+        token: widget.token,
+        requestId: widget.requestId,
+        puan: sonuc.puan,
+        yorum: sonuc.yorum,
+        canli: widget.isLive,
+      ));
     }
     _kapat();
   }

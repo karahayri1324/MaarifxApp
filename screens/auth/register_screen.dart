@@ -61,11 +61,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   late final TapGestureRecognizer _politikaTap = TapGestureRecognizer()
-    ..onTap = () {
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const PrivacyPolicyScreen()),
-      );
-    };
+    ..onTap = () => gizlilikPolitikasiniAc(context);
 
   @override
   Widget build(BuildContext context) {

@@ -77,6 +77,37 @@ class AuthService {
     }
   }
 
+  // ─── ŞİFREMİ UNUTTUM (2026-11-08) ───────────────────────────────────────
+  // Sunucu 6 haneli kodu iletisim@ogretimsayfam.com'dan e-postalar (15 dk geçerli,
+  // 5 yanlış denemede yanar). Yanıt hesabın var olup olmadığını SÖYLEMEZ.
+  // Dönüş: (ok, kullanıcıya gösterilecek mesaj).
+
+  Future<({bool ok, String mesaj})> sifreKoduIste(String email) =>
+      _sifrePost('/api/auth/sifre-unuttum', {'email': email.trim()});
+
+  Future<({bool ok, String mesaj})> sifreSifirla(String email, String kod, String yeniSifre) =>
+      _sifrePost('/api/auth/sifre-sifirla', {'email': email.trim(), 'kod': kod.trim(), 'yeniSifre': yeniSifre});
+
+  Future<({bool ok, String mesaj})> _sifrePost(String yol, Map<String, String> govde) async {
+    try {
+      final r = await http
+          .post(
+            Uri.parse('$_baseUrl$yol'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(govde),
+          )
+          .timeout(AppConfig.connectionTimeout);
+      Map<String, dynamic> j = const {};
+      try {
+        j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+      } catch (_) {}
+      if (r.statusCode == 200) return (ok: true, mesaj: (j['mesaj'] as String?) ?? '');
+      return (ok: false, mesaj: (j['error'] as String?) ?? 'Bir hata oluştu (${r.statusCode}).');
+    } catch (_) {
+      return (ok: false, mesaj: 'Bağlantı hatası. İnternet bağlantını kontrol et.');
+    }
+  }
+
   /// Auto-login: Kayitli token ile /api/auth/me kontrol et
   Future<AuthResult?> tryAutoLogin() async {
     final token = await getSavedToken();

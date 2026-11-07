@@ -8,6 +8,7 @@ import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:exif/exif.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import '../../services/uzak_ayarlar.dart';
 import '../../config/theme.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
@@ -465,10 +466,6 @@ class _ChatInputState extends State<ChatInput> {
             _DrawOnImageToggle(),
             const Divider(height: 1),
 
-            // Dusunme sureci (model reasoning) toggle
-            _EnableThinkingToggle(),
-            const Divider(height: 1),
-
             // MISAFIR sinif seviyesi: yanlis secimi duzeltebilsin (kayitlida bu
             // Ayarlar > Sinif Seviyesi'nde; misafirde menu/ayarlar ekrani yok).
             // Kayitli kullanicida bu blok HIC cizilmez (ayirici dahil).
@@ -706,79 +703,6 @@ class _MisafirSinifSatiri extends StatelessWidget {
   }
 }
 
-/// Dusunme sureci (model reasoning) toggle
-class _EnableThinkingToggle extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final chatProvider = context.watch<ChatProvider>();
-    final enabled = chatProvider.enableThinking;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: Row(
-        children: [
-          Icon(Icons.psychology_rounded,
-              size: 18, color: context.textSecondary),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Düşünme Süreci',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: context.textPrimary,
-                  ),
-                ),
-                Text(
-                  enabled
-                      ? 'Model adım adım düşünür (daha doğru)'
-                      : 'Hızlı yanıt (düşünme atlanır)',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: context.textMuted,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          GestureDetector(
-            onTap: () => chatProvider.setEnableThinking(!enabled),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: 48,
-              height: 28,
-              padding: const EdgeInsets.all(3),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
-                color: enabled ? AppTheme.primary : context.bgTertiary,
-                border: Border.all(
-                  color:
-                      enabled ? AppTheme.primary : context.borderColor,
-                ),
-              ),
-              child: AnimatedAlign(
-                duration: const Duration(milliseconds: 200),
-                alignment:
-                    enabled ? Alignment.centerRight : Alignment.centerLeft,
-                child: Container(
-                  width: 22,
-                  height: 22,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: enabled ? Colors.white : context.textMuted,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 /// Detay seviyesi secici (1-5)
 class _DetailLevelSelector extends StatelessWidget {
@@ -911,6 +835,7 @@ class _ModelChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final model = context.select<ChatProvider, String>((p) => p.model);
+    final modelAdi = context.select<UzakAyarlar?, String>((u) => u?.modelAdi ?? UzakAyarlar.varsayilanModelAdi);
     final isMax = model == '3.0-max';
     final renk = isMax ? context.blue : context.textSecondary;
 
@@ -923,7 +848,7 @@ class _ModelChip extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              isMax ? 'MAX' : '3.0',
+              isMax ? 'MAX' : modelAdi,
               style: context.mono(
                 fontSize: 12,
                 color: renk,
@@ -946,6 +871,8 @@ class ModelSelector extends StatelessWidget {
   Widget build(BuildContext context) {
     final chatProvider = context.watch<ChatProvider>();
     final model = chatProvider.model;
+    // Görünen ad sunucudan (admin paneli); iç kimlik ('3.0' / '3.0-max') DEĞİŞMEZ.
+    final modelAdi = context.watch<UzakAyarlar?>()?.modelAdi ?? UzakAyarlar.varsayilanModelAdi;
     // Kilitli-çizimsiz sohbette MAX seçilebilir GÖRÜNMESİN → efektif mod
     final drawOn = chatProvider.effectiveDrawOnImage;
     final isGuest = chatProvider.isGuestUser;
@@ -970,7 +897,7 @@ class ModelSelector extends StatelessWidget {
               ),
               const Spacer(),
               Text(
-                model == '3.0-max' ? 'MAX' : '3.0',
+                model == '3.0-max' ? 'MAX' : modelAdi,
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
@@ -981,7 +908,7 @@ class ModelSelector extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           _ModelOption(
-            title: '3.0',
+            title: modelAdi,
             subtitle: 'Standart — hızlı ve dengeli çözüm',
             selected: model == '3.0',
             enabled: true,
@@ -989,7 +916,7 @@ class ModelSelector extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           _ModelOption(
-            title: '3.0',
+            title: modelAdi,
             subtitle: isGuest
                 ? 'Giriş yapınca kullanılabilir'
                 : (drawOn

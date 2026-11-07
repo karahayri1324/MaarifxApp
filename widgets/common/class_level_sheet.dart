@@ -70,11 +70,7 @@ class _SinifSeviyesiSheetState extends State<_SinifSeviyesiSheet> {
     super.initState();
     _secili = widget.mevcut;
     _politikaTap = TapGestureRecognizer()
-      ..onTap = () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const PrivacyPolicyScreen()),
-        );
-      };
+      ..onTap = () => gizlilikPolitikasiniAc(context);
   }
 
   @override

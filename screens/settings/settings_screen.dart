@@ -347,11 +347,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _satir(
                   context,
                   baslik: 'Gizlilik politikası',
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const PrivacyPolicyScreen()),
-                    );
-                  },
+                  onTap: () => gizlilikPolitikasiniAc(context),
                 ),
               ]),
 
