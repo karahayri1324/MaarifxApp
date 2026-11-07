@@ -150,7 +150,14 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
   final _scrollController = ScrollController();
 
   static const _hiddenKey = 'hidden_conversation_ids';
-  static const _pageSize = 10;
+  // SOHBET LİSTESİ ESKİLERİ GÖSTERMİYORDU (2026-11-08): sayfa 10'du ve sonraki sayfa
+  // YALNIZ kaydırmayla isteniyordu. İlk sayfa ekrana sığınca (tipik telefon) liste
+  // kaydırılamıyor → kaydırma olayı hiç gelmiyor → öğrenci yalnız son ~10 sohbeti
+  // ("bu haftakileri") görüyordu. Artık: sayfa 30 + her yüklemeden sonra liste
+  // kaydırılamıyorsa kendiliğinden bir sonraki sayfa; aramada TÜM sohbetler yüklenir;
+  // ağ hatası "bitti" sayılmaz.
+  static const _pageSize = 30;
+  bool _agHatasi = false;
 
   @override
   void initState() {
@@ -172,6 +179,7 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
         !_isLoadingMore &&
         _hasMore &&
         _searchQuery.isEmpty) {
+      _agHatasi = false; // kullanıcı kaydırdı → tekrar dene
       _loadMore();
     }
   }
@@ -198,7 +206,19 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
         _hasMore = _conversations.length < _total;
         _isLoading = false;
       });
+      _ekranDolanaKadarYukle();
     }
+  }
+
+  /// Liste kaydırılamayacak kadar kısaysa (ya da gizlilerden sonra az öğe kaldıysa)
+  /// kaydırma olayı hiç gelmez → bir sonraki sayfayı kendiliğinden iste.
+  void _ekranDolanaKadarYukle() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_hasMore || _isLoadingMore || _agHatasi) return;
+      final kaydirilamaz = !_scrollController.hasClients ||
+          _scrollController.position.maxScrollExtent <= 100;
+      if (kaydirilamaz || _searchQuery.isNotEmpty) _loadMore();
+    });
   }
 
   Future<void> _loadMore() async {
@@ -210,13 +230,24 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
       limit: _pageSize,
       offset: _conversations.length,
     );
-    if (mounted) {
-      setState(() {
-        _conversations.addAll(result.conversations);
-        _hasMore = _conversations.length < _total;
-        _isLoadingMore = false;
-      });
-    }
+    if (!mounted) return;
+    // vdsService hata durumunda (boş, 0) döndürür: bunu "liste bitti" SAYMA —
+    // yoksa tek bir ağ hıçkırığı eski sohbetleri oturum boyunca gizliyordu.
+    final hata = result.conversations.isEmpty && result.total == 0 && _total > 0;
+    setState(() {
+      if (hata) {
+        _agHatasi = true;
+      } else {
+        _agHatasi = false;
+        // Sayfalar arasında bir sohbet güncellenip öne geçerse aynı öğe iki kez gelir.
+        final varolan = _conversations.map((c) => c.id).toSet();
+        _conversations.addAll(result.conversations.where((c) => !varolan.contains(c.id)));
+        if (result.total > 0) _total = result.total;
+        _hasMore = result.conversations.isNotEmpty && _conversations.length < _total;
+      }
+      _isLoadingMore = false;
+    });
+    if (!hata) _ekranDolanaKadarYukle();
   }
 
   /// Sohbeti GERÇEKTEN siler (önce onay; silme başarısızsa liste değişmez).
@@ -365,7 +396,12 @@ class _ChatHistoryListState extends State<_ChatHistoryList> {
             height: 40,
             child: TextField(
               controller: _searchController,
-              onChanged: (value) => setState(() => _searchQuery = value),
+              onChanged: (value) {
+                setState(() => _searchQuery = value);
+                // Arama yalnız yüklenmiş sohbetlerde yapılır → eskiler de bulunsun diye
+                // arama başlayınca kalan sayfalar arka arkaya yüklenir.
+                if (value.isNotEmpty) _ekranDolanaKadarYukle();
+              },
               onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
               style: TextStyle(fontSize: 14.5, color: context.textPrimary),
               decoration: InputDecoration(
